@@ -1,0 +1,9 @@
+{
+  "itemGroup.advanced_portals": "Advanced Portals",
+  "block.advanced_portals.portal_block": "Portal Block",
+  "block.advanced_portals.portal_controller": "Portal Controller",
+  "block.advanced_portals.portal_teleport": "Portal Teleport Block",
+  "block.advanced_portals.portal_battery": "Portal Battery",
+  "block.advanced_portals.portal_powercable": "Portal Power Cable"
+
+}

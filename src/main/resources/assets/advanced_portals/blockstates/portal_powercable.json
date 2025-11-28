@@ -1,0 +1,66 @@
+{
+  "multipart": [
+    {
+
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_center"
+      }
+    },
+
+
+    {
+      "when": {
+        "north": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_north"
+      }
+    },
+
+
+    {
+      "when": {
+        "south": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_south"
+      }
+    },
+
+    {
+      "when": {
+        "east": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_east"
+      }
+    },
+
+    {
+      "when": {
+        "west": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_west"
+      }
+    },
+
+    {
+      "when": {
+        "up": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_up"
+      }
+    },
+
+    {
+      "when": {
+        "down": "true"
+      },
+      "apply": {
+        "model": "advanced_portals:block/portal_powercable_down"
+      }
+    }
+  ]
+}

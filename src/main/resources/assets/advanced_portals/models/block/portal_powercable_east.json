@@ -1,0 +1,23 @@
+{
+	"format_version": "1.21.6",
+	"credit": "Made with Blockbench",
+	"textures": {
+		"1": "advanced_portals:block/portal_power_cable/portal_powercable_side",
+		"particle": "advanced_portals:block/portal_power_cable/portal_powercable_side"
+	},
+	"elements": [
+		{
+			"from": [11, 5, 5],
+			"to": [16, 11, 11],
+			"rotation": {"angle": 0, "axis": "y", "origin": [12, 8, 9]},
+			"faces": {
+				"north": {"uv": [3, 0, 5.5, 3], "texture": "#1"},
+				"east": {"uv": [0, 3, 3, 6], "texture": "#1"},
+				"south": {"uv": [3, 3, 5.5, 6], "texture": "#1"},
+				"west": {"uv": [0, 0, 3, 3], "texture": "#1"},
+				"up": {"uv": [8.5, 2.5, 5.5, 0], "rotation": 270, "texture": "#1"},
+				"down": {"uv": [8.5, 2.5, 5.5, 5], "rotation": 90, "texture": "#1"}
+			}
+		}
+	]
+}

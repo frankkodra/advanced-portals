@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "advanced_portals:block/portal_controller" },
+    "facing=east": { "model": "advanced_portals:block/portal_controller", "y": 90 },
+    "facing=south": { "model": "advanced_portals:block/portal_controller", "y": 180 },
+    "facing=west": { "model": "advanced_portals:block/portal_controller", "y": 270 }
+  }
+}
