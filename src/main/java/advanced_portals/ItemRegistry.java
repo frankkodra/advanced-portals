@@ -18,15 +18,18 @@ public class ItemRegistry {
     public static final RegistryObject<Item> PORTAL_CONTROLLER_ITEM =
             ITEMS.register("portal_controller", () -> new BlockItem(PortalBlocks.PORTAL_CONTROLLER_BLOCK.get(), new Item.Properties()));
 
-  //  public static final RegistryObject<Item> PORTAL_TELEPORT_ITEM =
-      //      ITEMS.register("portal_teleport", () -> new BlockItem(PortalBlocks.PORTAL_TELEPORT_BLOCK.get(), new Item.Properties()));
-
     public static final RegistryObject<Item> PORTAL_BATTERY_ITEM =
             ITEMS.register("portal_battery", () -> new BlockItem(PortalBlocks.PORTAL_BATTERY_BLOCK.get(), new Item.Properties()));
-   // public static final RegistryObject<Item> PORTAL_TANK_ITEM = ITEMS.register("portal_tank",()->new BlockItem(PortalBlocks.))
-   public static final RegistryObject<Item> PORTAL_POWERCABLE_ITEM =
-           ITEMS.register("portal_powercable", () -> new BlockItem(PortalBlocks.PORTAL_POWERCABLE_BLOCK.get(), new Item.Properties()));
-    //
+
+    public static final RegistryObject<Item> PORTAL_POWERCABLE_ITEM =
+            ITEMS.register("portal_powercable", () -> new BlockItem(PortalBlocks.PORTAL_POWERCABLE_BLOCK.get(), new Item.Properties()));
+
+    // Add the fluid block items with consistent naming
+    public static final RegistryObject<Item> PORTAL_FLUIDPIPE_ITEM =
+            ITEMS.register("portal_fluidpipe", () -> new BlockItem(PortalBlocks.PORTAL_FLUIDPIPE_BLOCK.get(), new Item.Properties()));
+
+    public static final RegistryObject<Item> PORTAL_FLUIDTANK_ITEM =
+            ITEMS.register("portal_fluidtank", () -> new BlockItem(PortalBlocks.PORTAL_FLUIDTANK_BLOCK.get(), new Item.Properties()));
 
     public static void register(IEventBus eventBus) {
         ITEMS.register(eventBus);

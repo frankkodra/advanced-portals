@@ -7,6 +7,8 @@ import net.minecraftforge.registries.ForgeRegistries;
 import portal_battery.PortalBatteryBlockEntity;
 import portal_block.PortalBlockEntity;
 import portal_controller.PortalControllerBlockEntity;
+import portal_fluid_pipe.PortalFluidPipeBlockEntity;
+import portal_fluid_tank.PortalFluidTankBlockEntity;
 import portal_power_cable.PortalPowerCableBlockEntity;
 import portal_teleport_block.PortalTeleportBlockEntity;
 
@@ -29,12 +31,24 @@ public class PortalBlockEntities {
                     () -> BlockEntityType.Builder.of(PortalTeleportBlockEntity::new,
                             PortalBlocks.PORTAL_TELEPORT_BLOCK.get()).build(null));
 
-
     public static final RegistryObject<BlockEntityType<PortalBatteryBlockEntity>> PORTAL_BATTERY_BLOCK_ENTITY =
             BLOCK_ENTITIES.register("portal_battery",
-                    () -> BlockEntityType.Builder.of(PortalBatteryBlockEntity::new, PortalBlocks.PORTAL_BATTERY_BLOCK.get()).build(null));
+                    () -> BlockEntityType.Builder.of(PortalBatteryBlockEntity::new,
+                            PortalBlocks.PORTAL_BATTERY_BLOCK.get()).build(null));
 
     public static final RegistryObject<BlockEntityType<PortalPowerCableBlockEntity>> PORTAL_POWERCABLE_BLOCK_ENTITY =
             BLOCK_ENTITIES.register("portal_powercable",
-            ()->BlockEntityType.Builder.of(PortalPowerCableBlockEntity::new, PortalBlocks.PORTAL_POWERCABLE_BLOCK.get()).build(null));
+                    () -> BlockEntityType.Builder.of(PortalPowerCableBlockEntity::new,
+                            PortalBlocks.PORTAL_POWERCABLE_BLOCK.get()).build(null));
+
+    // Add the fluid block entities with consistent naming
+    public static final RegistryObject<BlockEntityType<PortalFluidPipeBlockEntity>> PORTAL_FLUIDPIPE_BLOCK_ENTITY =
+            BLOCK_ENTITIES.register("portal_fluidpipe",
+                    () -> BlockEntityType.Builder.of(PortalFluidPipeBlockEntity::new,
+                            PortalBlocks.PORTAL_FLUIDPIPE_BLOCK.get()).build(null));
+
+    public static final RegistryObject<BlockEntityType<PortalFluidTankBlockEntity>> PORTAL_FLUIDTANK_BLOCK_ENTITY =
+            BLOCK_ENTITIES.register("portal_fluidtank",
+                    () -> BlockEntityType.Builder.of(PortalFluidTankBlockEntity::new,
+                            PortalBlocks.PORTAL_FLUIDTANK_BLOCK.get()).build(null));
 }

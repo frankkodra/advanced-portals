@@ -11,6 +11,8 @@ import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.BlockEntityTicker;
+import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -18,13 +20,11 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.level.material.MapColor;
 import net.minecraft.world.phys.BlockHitResult;
 import org.jetbrains.annotations.Nullable;
-import portal_multiblock.PortalMultiblockManager;
 import portal_multiblock.PortalStructure;
 
 public class PortalControllerBlock extends BaseEntityBlock {
     public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
-    public BlockPos blockPos;
-    public PortalStructure portalStructure;
+
     public PortalControllerBlock() {
         super(Properties.of()
                 .mapColor(MapColor.COLOR_BLUE)
@@ -49,10 +49,18 @@ public class PortalControllerBlock extends BaseEntityBlock {
     @Override
     public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
         super.onPlace(state, level, pos, oldState, isMoving);
-        blockPos=blockPos;
+
         if (!level.isClientSide()) {
-          portalStructure=  PortalStructure.addCreateOrMergePortalStructureForBlock(pos, level);
+            // Create or merge portal structure
+            PortalStructure newPortalStructure = PortalStructure.addCreateOrMergePortalStructureForBlock(pos, level);
+
+            // Update the block entity reference
+            BlockEntity blockEntity = level.getBlockEntity(pos);
+            if (blockEntity instanceof PortalControllerBlockEntity) {
+                ((PortalControllerBlockEntity) blockEntity).setPortalStructure(newPortalStructure);
+            }
         }
+
         if (!level.isClientSide) {
             level.updateNeighborsAt(pos, state.getBlock());
         }
@@ -61,7 +69,14 @@ public class PortalControllerBlock extends BaseEntityBlock {
     @Override
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
         if (!level.isClientSide()) {
-           portalStructure.portalControllers.remove(blockPos);
+            BlockEntity blockEntity = level.getBlockEntity(pos);
+            if (blockEntity instanceof PortalControllerBlockEntity) {
+                PortalControllerBlockEntity portalControllerBlockEntity = (PortalControllerBlockEntity) blockEntity;
+                PortalStructure portalStructure = ((PortalControllerBlockEntity) blockEntity).portalStructure;
+                if (portalStructure != null) {
+                    portalStructure.removePortalController(portalControllerBlockEntity );
+                }
+            }
         }
         super.onRemove(state, level, pos, newState, isMoving);
     }
@@ -87,5 +102,19 @@ public class PortalControllerBlock extends BaseEntityBlock {
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
         return new PortalControllerBlockEntity(pos, state);
+    }
+
+    @Nullable
+    @Override
+    public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
+        if (level.isClientSide()) {
+            return null;
+        }
+
+        return createTickerHelper(
+                type,
+                advanced_portals.PortalBlockEntities.PORTAL_CONTROLLER_BLOCK_ENTITY.get(),
+                PortalControllerBlockEntity::tick
+        );
     }
 }

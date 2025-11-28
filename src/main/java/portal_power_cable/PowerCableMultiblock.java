@@ -12,6 +12,7 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import portal_battery.BatteryMultiblock;
 import portal_block.PortalBlock;
+import portal_block.PortalBlockEntity;
 import portal_multiblock.PortalMultiblockManager;
 import portal_multiblock.PortalStructure;
 import advanced_portals.Logger;
@@ -130,7 +131,7 @@ public class PowerCableMultiblock {
     }
 
     // FIXED: Helper method to get multiblock from block entity
-    private static PowerCableMultiblock getMultiblockFromBlockEntity(BlockPos pos, Level level) {
+    public static PowerCableMultiblock getMultiblockFromBlockEntity(BlockPos pos, Level level) {
         BlockEntity blockEntity = level.getBlockEntity(pos);
         if (blockEntity instanceof PortalPowerCableBlockEntity) {
             return ((PortalPowerCableBlockEntity) blockEntity).getMultiblock();
@@ -156,10 +157,10 @@ public class PowerCableMultiblock {
 
         for (Direction direction : Direction.values()) {
             BlockPos neighborPos = pos.relative(direction);
-            Block block = level.getBlockState(neighborPos).getBlock();
+            BlockEntity block = level.getBlockEntity(neighborPos);
 
-            if (block instanceof PortalBlock) {
-                PortalStructure portalStructure = ((PortalBlock) block).portalStructure;
+            if (block instanceof PortalBlockEntity) {
+                PortalStructure portalStructure = ((PortalBlockEntity) block).portalStructure;
                 if (portalStructure != null) {
                     portals.add(portalStructure);
                 }

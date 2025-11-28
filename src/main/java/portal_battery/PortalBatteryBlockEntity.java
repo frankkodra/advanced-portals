@@ -12,7 +12,6 @@ import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.energy.EnergyStorage;
 import net.minecraftforge.energy.IEnergyStorage;
-import portal_multiblock.PortalMultiblockManager;
 
 import javax.annotation.Nonnull;
 import java.util.UUID;
@@ -25,7 +24,9 @@ public class PortalBatteryBlockEntity extends BlockEntity {
     // Track multiblock ID for lazy loading
     private UUID batteryMultiblockId;
 
-    // FIXED: Remove constructor with multiblock parameter
+    // NEW FIELD: Tracks if this BlockEntity has joined its multiblock after loading
+    public boolean joinedMultiblock = false;
+
     public PortalBatteryBlockEntity(BlockPos pos, BlockState state) {
         super(PortalBlockEntities.PORTAL_BATTERY_BLOCK_ENTITY.get(), pos, state);
     }
@@ -36,18 +37,44 @@ public class PortalBatteryBlockEntity extends BlockEntity {
 
         if(tag.contains("batteryMultiblockId")) {
             batteryMultiblockId = tag.getUUID("batteryMultiblockId");
-
-            Level level = this.getLevel();
-            if(level != null && !level.isClientSide()) {
-                // Use the static method in BatteryMultiblock class
-                batteryMultiblock = BatteryMultiblock.getOrCreateBatteryMultiblock(batteryMultiblockId, level);
-
-                // Add this battery to the multiblock
-                batteryMultiblock.addBattery(this.getBlockPos());
-            }
+            // Set to false to trigger the lazy loading logic in the 'tick' method
+            this.joinedMultiblock = false;
+        } else {
+            // If no ID is saved, it's a new block, and onPlace will handle it.
+            this.joinedMultiblock = true;
         }
 
         energyStorage.deserializeNBT(tag.get("Energy"));
+    }
+
+    /**
+     * Static tick method for handling lazy loading and regular updates.
+     * This mirrors the logic in your PortalPowerCableBlockEntity.
+     */
+    public static void tick(Level level, BlockPos pos, BlockState state, PortalBatteryBlockEntity be) {
+        // Only run on the server and if we haven't joined the multiblock yet
+        if(!level.isClientSide && !be.joinedMultiblock) {
+
+            // If the ID is null, we assume the block was placed before saving/loading
+            if (be.batteryMultiblockId == null) {
+                be.joinedMultiblock = true;
+                return;
+            }
+
+            // Use the saved ID to get or create the multiblock
+            be.batteryMultiblock = BatteryMultiblock.getOrCreateBatteryMultiblock(be.batteryMultiblockId, level);
+
+            // Add this block to the multiblock (this is where the logging occurs)
+            if (be.batteryMultiblock != null) {
+                be.batteryMultiblock.addBattery(pos);
+                be.joinedMultiblock = true;
+
+                // Ensure the BlockEntity is marked for saving if the multiblock reference was just set.
+                be.setChanged();
+            }
+        }
+
+        // Add your existing tick logic here (e.g., energy transfer, etc.)
     }
 
     @Override
@@ -63,15 +90,17 @@ public class PortalBatteryBlockEntity extends BlockEntity {
         tag.put("Energy", energyStorage.serializeNBT());
     }
 
-    // FIXED: Public method to set multiblock
+    // Public method to set multiblock
     public void setBatteryMultiblock(BatteryMultiblock multiblock) {
         this.batteryMultiblock = multiblock;
         if (multiblock != null) {
             this.batteryMultiblockId = multiblock.getMultiblockId();
+            // IMPORTANT: If setting on Place, mark as joined to skip the tick logic
+            this.joinedMultiblock = true;
         }
     }
 
-    // FIXED: Add public getter for multiblock
+    // Add public getter for multiblock
     public BatteryMultiblock getBatteryMultiblock() {
         return batteryMultiblock;
     }

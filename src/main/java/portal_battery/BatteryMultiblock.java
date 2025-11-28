@@ -37,14 +37,29 @@ public class BatteryMultiblock {
         Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) + " created", true);
     }
 
-    // Static creation method with lazy initialization
+    /**
+     * Retrieves an existing BatteryMultiblock from the manager based on its ID,
+     * or creates a new one if the ID is not found.
+     * This is used for lazy loading from a saved BlockEntity's UUID.
+     */
     public static BatteryMultiblock getOrCreateBatteryMultiblock(UUID multiblockId, Level level) {
+        // 1. If ID is null (which shouldn't happen during a proper load), create a new one.
+        if (multiblockId == null) {
+            multiblockId = UUID.randomUUID();
+            Logger.sendMessage(String.format("BatteryMultiblock: Generated new ID %s on load/tick (Error or new block).", multiblockId.toString().substring(0, 8)), true);
+        }
+
+        // 2. Check if the multiblock is already loaded in the manager.
         BatteryMultiblock existing = PortalMultiblockManager.getBatteryMultiblock(multiblockId);
         if (existing != null) {
+            Logger.sendMessage(String.format("BatteryMultiblock: Found existing multiblock with ID %s on load/tick.", multiblockId.toString().substring(0, 8)), true);
             return existing;
-        } else {
-            return new BatteryMultiblock(multiblockId, level);
         }
+
+        // 3. If not found, recreate it with the saved ID. The constructor handles adding it to the manager.
+        BatteryMultiblock newMultiblock = new BatteryMultiblock(multiblockId, level);
+        Logger.sendMessage(String.format("BatteryMultiblock: Recreated multiblock with ID %s from saved data on load/tick.", multiblockId.toString().substring(0, 8)), true);
+        return newMultiblock;
     }
 
     public BatteryMultiblock(String batteryId, String[] portalIdsArr, BlockPos pos) {
@@ -102,6 +117,10 @@ public class BatteryMultiblock {
         return resultMultiblock;
     }
 
+    public void addBattery(BlockPos pos) {
+        batteryBlocks.add(pos);
+    }
+
     // FIXED: Get multiblock from block entity instead of block
     private static Set<BatteryMultiblock> findAdjacentBatteryMultiblocks(BlockPos pos, Level level) {
         Set<BatteryMultiblock> multiblocks = new HashSet<>();
@@ -153,10 +172,12 @@ public class BatteryMultiblock {
 
         for (Direction direction : Direction.values()) {
             BlockPos neighborPos = pos.relative(direction);
-            BlockEntity block = level.getBlockEntity(pos);
+            BlockEntity block = level.getBlockEntity(neighborPos); // Check neighbor's block entity
 
+            // Check if the neighbor block entity exists and is a PortalPowerCableBlockEntity
             if (block instanceof PortalPowerCableBlockEntity) {
-                PowerCableMultiblock cableMultiblock = ((PortalPowerCableBlockEntity) block).multiblock;
+                // Check if the PowerCableMultiblock has been lazy-loaded/set on the BE
+                PowerCableMultiblock cableMultiblock = ((PortalPowerCableBlockEntity) block).getMultiblock();
                 if (cableMultiblock != null) {
                     cables.add(cableMultiblock);
                 }
@@ -209,8 +230,6 @@ public class BatteryMultiblock {
             int cableConnectionsToAdd = otherMultiblock.connectedCableMultiblocksMap.size();
             int energyToAdd = otherMultiblock.storedEnergy;
 
-            // Collect positions that need reference updates
-
             // Perform the merge
             mainMultiblock.mergeWith(otherMultiblock);
 
@@ -253,32 +272,32 @@ public class BatteryMultiblock {
     }
     // Improved battery removal with proper splitting
     public void handleBatteryBlockBreak(BlockPos removedPos) {
-        Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
-                " removing battery at " + removedPos + " (currently " + batteryBlocks.size() + " batteries)", true);
+        if (this.batteryBlocks.remove(removedPos)) {
+            // Log the removal (subtraction) (per user request)
+            Logger.sendMessage(String.format("BatteryMultiblock: Subtracted block at [%d, %d, %d]. Total blocks: %d. Multiblock ID: %s",
+                    removedPos.getX(), removedPos.getY(), removedPos.getZ(), this.batteryBlocks.size(), this.multiblockId.toString().substring(0, 8)), true);
 
-        // Remove from battery blocks
-        batteryBlocks.remove(removedPos);
+            // Remove cable connections through this battery
+            removeCableConnectionsForBattery(removedPos);
 
-        // Remove cable connections through this battery
-        removeCableConnectionsForBattery(removedPos);
+            // If no batteries left, destroy the multiblock
+            if (batteryBlocks.isEmpty()) {
+                PortalMultiblockManager.removeBatteryMultiblock(this);
+                Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) + " DESTROYED (no batteries remaining)", true);
+                return;
+            }
 
-        // If no batteries left, destroy the multiblock
-        if (batteryBlocks.isEmpty()) {
-            PortalMultiblockManager.removeBatteryMultiblock(this);
-            Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) + " DESTROYED (no batteries remaining)", true);
-            return;
-        }
+            // Check if the multiblock needs to split into multiple components
+            List<Set<BlockPos>> disconnectedComponents = findDisconnectedComponents();
 
-        // Check if the multiblock needs to split into multiple components
-        List<Set<BlockPos>> disconnectedComponents = findDisconnectedComponents();
-
-        if (disconnectedComponents.size() > 1) {
-            Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
-                    " splitting into " + disconnectedComponents.size() + " components", true);
-            splitIntoComponents(disconnectedComponents);
-        } else {
-            Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
-                    " now has " + batteryBlocks.size() + " batteries (no split needed)", true);
+            if (disconnectedComponents.size() > 1) {
+                Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
+                        " splitting into " + disconnectedComponents.size() + " components", true);
+                splitIntoComponents(disconnectedComponents);
+            } else {
+                Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
+                        " now has " + batteryBlocks.size() + " batteries (no split needed)", true);
+            }
         }
     }
 
@@ -369,6 +388,9 @@ public class BatteryMultiblock {
                     " with " + component.size() + " batteries from split", true);
         }
 
+        // CRITICAL: Update BlockEntity references for the blocks that stayed in the main multiblock
+        updateAllBlockEntityReferences(this, mainComponent);
+
         Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
                 " now has " + batteryBlocks.size() + " batteries after split", true);
     }
@@ -414,13 +436,15 @@ public class BatteryMultiblock {
                     iterator.remove();
                 }
 
+                // CRITICAL: Update BlockEntity references for the blocks in the new multiblock
+                updateAllBlockEntityReferences(newMultiblock, component);
+
                 Logger.sendMessage("Transferred " + pointsForNewMultiblock.size() + " connection points to new multiblock for cable " +
                         cableId.toString().substring(0, 8), true);
             }
         }
     }
 
-    // Add cable connection
     // Add cable connection
     public void addCableConnection(PowerCableMultiblock cable, BlockPos batteryPos) {
         if (cable == null) return;
@@ -445,15 +469,12 @@ public class BatteryMultiblock {
             Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
                     " CONNECTED to PowerCableMultiblock " + cableId.toString().substring(0, 8) +
                     " via battery at " + batteryPos, true);
+            // Bidirectional connection - only if it's a new connection
+            cable.addBatteryConnection(this, batteryPos);
         } else {
             Logger.sendMessage("BatteryMultiblock " + multiblockId.toString().substring(0, 8) +
                     " added connection to PowerCableMultiblock " + cableId.toString().substring(0, 8) +
                     " at " + batteryPos + " (" + connectedCableMultiblocksMap.get(cableId).size() + " total connections)", true);
-        }
-
-        // Bidirectional connection - only if it's a new connection
-        if (isNewConnection) {
-            cable.addBatteryConnection(this, batteryPos);
         }
     }
 
@@ -499,14 +520,6 @@ public class BatteryMultiblock {
 
     public void addBatteries(Set<BlockPos> batteryBlocks) {
         this.batteryBlocks.addAll(batteryBlocks);
-    }
-
-    public void addBattery(BlockPos pos) {
-        batteryBlocks.add(pos);
-    }
-
-    public void removeBattery(BlockPos pos) {
-        handleBatteryBlockBreak(pos);
     }
 
     public boolean connectToPortal(UUID portalId) {
@@ -575,7 +588,8 @@ public class BatteryMultiblock {
             multiblock.batteryBlocks.add(pos);
             return multiblock;
         } else {
-            return new BatteryMultiblock(batteryId, portalIdsArr, pos);
+            // Placeholder for Level
+            return new BatteryMultiblock(UUID.fromString(batteryId), null);
         }
     }
 

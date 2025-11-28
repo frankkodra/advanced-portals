@@ -21,9 +21,11 @@ public class CreativeTabRegistry {
                         // Portal System Items
                         output.accept(ItemRegistry.PORTAL_BLOCK_ITEM.get());
                         output.accept(ItemRegistry.PORTAL_CONTROLLER_ITEM.get());
-                        //output.accept(ItemRegistry.PORTAL_TELEPORT_ITEM.get());
                         output.accept(ItemRegistry.PORTAL_BATTERY_ITEM.get());
                         output.accept(ItemRegistry.PORTAL_POWERCABLE_ITEM.get());
+                        // Add the new fluid items
+                        output.accept(ItemRegistry.PORTAL_FLUIDPIPE_ITEM.get());
+                        output.accept(ItemRegistry.PORTAL_FLUIDTANK_ITEM.get());
                     })
                     .build());
 
