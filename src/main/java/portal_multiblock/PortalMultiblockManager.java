@@ -3,25 +3,37 @@ package portal_multiblock;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
+import net.minecraftforge.event.server.ServerStoppingEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
 import portal_battery.BatteryMultiblock;
 import portal_fluid_pipe.FluidPipeMultiblock;
 import portal_fluid_tank.TankMultiblock;
 import portal_power_cable.PowerCableMultiblock;
 
 import java.util.*;
+@Mod.EventBusSubscriber(modid = "advanced_portals", bus = Mod.EventBusSubscriber.Bus.FORGE)
 
 public class PortalMultiblockManager {
     // Portal management
-    public final static Map<UUID, PortalStructure> portals = new HashMap<>();
-    public final static Map<String, UUID> portalNameToId = new HashMap<>();
+    public  static Map<UUID, PortalStructure> portals = new HashMap<>();
+    public  static Map<String, UUID> portalNameToId = new HashMap<>();
 
     // Sub-multiblock management - JUST REGISTRY
-    public final static Map<UUID, BatteryMultiblock> batteryMultiblocks = new HashMap<>();
-    public final static Map<UUID, PowerCableMultiblock> powerCableMultiblocks = new HashMap<>();
-    public final static Map<UUID, TankMultiblock> tankMultiblocks = new HashMap<>();
-    public final static Map<UUID, FluidPipeMultiblock> fluidPipeMultiblocks = new HashMap<>();
+    public  static Map<UUID, BatteryMultiblock> batteryMultiblocks = new HashMap<>();
+    public  static Map<UUID, PowerCableMultiblock> powerCableMultiblocks = new HashMap<>();
+    public  static Map<UUID, TankMultiblock> tankMultiblocks = new HashMap<>();
+    public  static Map<UUID, FluidPipeMultiblock> fluidPipeMultiblocks = new HashMap<>();
 
-    public PortalMultiblockManager() {
+    @SubscribeEvent
+    public static void onServerStopping(ServerStoppingEvent event) {
+        batteryMultiblocks.clear();
+        powerCableMultiblocks.clear();
+        tankMultiblocks.clear();
+        fluidPipeMultiblocks.clear();
+        portals.clear();
+        portalNameToId.clear();
+
     }
 
     // Core portal management
@@ -298,5 +310,9 @@ public class PortalMultiblockManager {
         }
 
         return issues;
+    }
+
+    public static void addPortalStructure(PortalStructure portalStructure) {
+        portals.put(portalStructure.getPortalId(), portalStructure);
     }
 }

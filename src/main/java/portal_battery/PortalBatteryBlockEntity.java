@@ -1,5 +1,6 @@
 package portal_battery;
 
+import advanced_portals.Logger;
 import advanced_portals.PortalBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -22,10 +23,10 @@ public class PortalBatteryBlockEntity extends BlockEntity {
     private final LazyOptional<IEnergyStorage> energyHandler = LazyOptional.of(() -> energyStorage);
 
     // Track multiblock ID for lazy loading
-    private UUID batteryMultiblockId;
+    public UUID batteryMultiblockId;
 
     // NEW FIELD: Tracks if this BlockEntity has joined its multiblock after loading
-    public boolean joinedMultiblock = false;
+    public boolean joinedMultiblock = true;
 
     public PortalBatteryBlockEntity(BlockPos pos, BlockState state) {
         super(PortalBlockEntities.PORTAL_BATTERY_BLOCK_ENTITY.get(), pos, state);
@@ -53,13 +54,10 @@ public class PortalBatteryBlockEntity extends BlockEntity {
      */
     public static void tick(Level level, BlockPos pos, BlockState state, PortalBatteryBlockEntity be) {
         // Only run on the server and if we haven't joined the multiblock yet
+        //Logger.sendMessage("Battery " + pos.toString().substring(0, 8) + " tick", true);
         if(!level.isClientSide && !be.joinedMultiblock) {
 
-            // If the ID is null, we assume the block was placed before saving/loading
-            if (be.batteryMultiblockId == null) {
-                be.joinedMultiblock = true;
-                return;
-            }
+
 
             // Use the saved ID to get or create the multiblock
             be.batteryMultiblock = BatteryMultiblock.getOrCreateBatteryMultiblock(be.batteryMultiblockId, level);
@@ -70,7 +68,6 @@ public class PortalBatteryBlockEntity extends BlockEntity {
                 be.joinedMultiblock = true;
 
                 // Ensure the BlockEntity is marked for saving if the multiblock reference was just set.
-                be.setChanged();
             }
         }
 

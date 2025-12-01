@@ -28,8 +28,11 @@ public class PortalFluidTankBlockEntity extends BlockEntity {
     };
     private final LazyOptional<IFluidHandler> fluidHandler = LazyOptional.of(() -> fluidTank);
 
-    private UUID tankMultiblockId;
-    public boolean joinedMultiblock = false;
+    // Track multiblock ID for lazy loading
+    public UUID tankMultiblockId;
+
+    // Tracks if this BlockEntity has joined its multiblock after loading
+    public boolean joinedMultiblock = true;
 
     public PortalFluidTankBlockEntity(BlockPos pos, BlockState state) {
         super(PortalBlockEntities.PORTAL_FLUIDTANK_BLOCK_ENTITY.get(), pos, state);
@@ -42,39 +45,23 @@ public class PortalFluidTankBlockEntity extends BlockEntity {
         if(tag.contains("tankMultiblockId")) {
             tankMultiblockId = tag.getUUID("tankMultiblockId");
             this.joinedMultiblock = false;
-            Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " loaded with multiblock ID: " +
-                    tankMultiblockId.toString().substring(0, 8), true);
         } else {
             this.joinedMultiblock = true;
-            Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " loaded with no saved multiblock ID", true);
         }
 
         fluidTank.readFromNBT(tag.getCompound("Fluid"));
-        Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " loaded fluid: " +
-                fluidTank.getFluidAmount() + "/" + fluidTank.getCapacity() + " mB", true);
     }
 
+    /**
+     * Static tick method for handling lazy loading and regular updates.
+     */
     public static void tick(Level level, BlockPos pos, BlockState state, PortalFluidTankBlockEntity be) {
         if(!level.isClientSide && !be.joinedMultiblock) {
-            if (be.tankMultiblockId == null) {
-                be.joinedMultiblock = true;
-                Logger.sendMessage("FluidTank BlockEntity at " + pos + " has null multiblock ID, skipping lazy load", true);
-                return;
-            }
-
-            Logger.sendMessage("FluidTank BlockEntity at " + pos + " lazy loading multiblock " +
-                    be.tankMultiblockId.toString().substring(0, 8), true);
-
             be.tankMultiblock = TankMultiblock.getOrCreateTankMultiblock(be.tankMultiblockId, level);
+
             if (be.tankMultiblock != null) {
                 be.tankMultiblock.addTank(pos);
                 be.joinedMultiblock = true;
-                be.setChanged();
-                Logger.sendMessage("FluidTank BlockEntity at " + pos + " successfully joined multiblock " +
-                        be.tankMultiblock.getMultiblockId().toString().substring(0, 8), true);
-            } else {
-                Logger.sendMessage("ERROR: FluidTank BlockEntity at " + pos + " failed to load multiblock " +
-                        be.tankMultiblockId.toString().substring(0, 8), true);
             }
         }
     }
@@ -85,29 +72,23 @@ public class PortalFluidTankBlockEntity extends BlockEntity {
 
         if(tankMultiblock != null) {
             tag.putUUID("tankMultiblockId", tankMultiblock.getMultiblockId());
-           // Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " saving multiblock ID: " +
-              //      tankMultiblock.getMultiblockId().toString().substring(0, 8), true);
         } else if(tankMultiblockId != null) {
             tag.putUUID("tankMultiblockId", tankMultiblockId);
-          //  Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " saving stored multiblock ID: " +
-             //       tankMultiblockId.toString().substring(0, 8), true);
         }
 
         tag.put("Fluid", fluidTank.writeToNBT(new CompoundTag()));
-       // Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " saving fluid: " +
-              //  fluidTank.getFluidAmount() + "/" + fluidTank.getCapacity() + " mB", true);
     }
 
+    // Public method to set multiblock
     public void setTankMultiblock(TankMultiblock multiblock) {
         this.tankMultiblock = multiblock;
         if (multiblock != null) {
             this.tankMultiblockId = multiblock.getMultiblockId();
             this.joinedMultiblock = true;
-            Logger.sendMessage("FluidTank BlockEntity at " + worldPosition + " set multiblock to " +
-                    multiblock.getMultiblockId().toString().substring(0, 8), true);
         }
     }
 
+    // Add public getter for multiblock
     public TankMultiblock getTankMultiblock() {
         return tankMultiblock;
     }

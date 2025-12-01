@@ -12,7 +12,7 @@ import java.util.UUID;
 
 public class PortalPowerCableBlockEntity extends BlockEntity {
     public PowerCableMultiblock multiblock;
-    public boolean joinedMultiblock=false;
+    public boolean joinedMultiblock=true;
     // Track multiblock ID for lazy loading
     private UUID powerCableMultiblockId;
 
@@ -27,7 +27,7 @@ public class PortalPowerCableBlockEntity extends BlockEntity {
         // FIXED: Enhanced loading
         if(tag.contains("powerCableMultiblockId")) {
             powerCableMultiblockId = tag.getUUID("powerCableMultiblockId");
-
+            joinedMultiblock=false;
 
                 // Use the static method in PowerCableMultiblock class
 
@@ -40,6 +40,7 @@ public static void tick(Level level, BlockPos pos, BlockState state, PortalPower
         be.multiblock = PowerCableMultiblock.getOrCreatePowerCableMultiblock(be.powerCableMultiblockId,be.level);
 
         be.multiblock.addCablePosition(be.getBlockPos());
+        PowerCableMultiblock.scanAndConnectToNearbyBatteries(be.multiblock,pos,be.level);
         be.joinedMultiblock=true;
 
     }
@@ -52,6 +53,7 @@ public static void tick(Level level, BlockPos pos, BlockState state, PortalPower
         // FIXED: Only save the multiblock UUID
         if(multiblock != null) {
             tag.putUUID("powerCableMultiblockId", multiblock.id);
+
         } else if(powerCableMultiblockId != null) {
             tag.putUUID("powerCableMultiblockId", powerCableMultiblockId);
         }

@@ -20,7 +20,7 @@ import java.util.UUID;
 
 public class PortalFluidPipeBlockEntity extends BlockEntity {
     public FluidPipeMultiblock multiblock;
-    public boolean joinedMultiblock = false;
+    public boolean joinedMultiblock = true;
 
     private final FluidTank fluidTank = new FluidTank(1000) {
         @Override
@@ -43,40 +43,22 @@ public class PortalFluidPipeBlockEntity extends BlockEntity {
         if(tag.contains("fluidPipeMultiblockId")) {
             fluidPipeMultiblockId = tag.getUUID("fluidPipeMultiblockId");
             this.joinedMultiblock = false;
-            Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " loaded with multiblock ID: " +
-                    fluidPipeMultiblockId.toString().substring(0, 8), true);
         } else {
             this.joinedMultiblock = true;
-            Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " loaded with no saved multiblock ID", true);
         }
 
         fluidTank.readFromNBT(tag.getCompound("Fluid"));
-        Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " loaded fluid: " +
-                fluidTank.getFluidAmount() + "/" + fluidTank.getCapacity() + " mB", true);
     }
 
     public static void tick(Level level, BlockPos pos, BlockState state, PortalFluidPipeBlockEntity be) {
         if(!level.isClientSide && !be.joinedMultiblock) {
-            if (be.fluidPipeMultiblockId == null) {
-                be.joinedMultiblock = true;
-                Logger.sendMessage("FluidPipe BlockEntity at " + pos + " has null multiblock ID, skipping lazy load", true);
-                return;
-            }
-
-            Logger.sendMessage("FluidPipe BlockEntity at " + pos + " lazy loading multiblock " +
-                    be.fluidPipeMultiblockId.toString().substring(0, 8), true);
-
-            be.multiblock = FluidPipeMultiblock.getOrCreateFluidPipeMultiblock(be.fluidPipeMultiblockId, be.level);
+            be.multiblock = FluidPipeMultiblock.getOrCreateFluidPipeMultiblock(be.fluidPipeMultiblockId, level);
 
             if (be.multiblock != null) {
                 be.multiblock.addPipePosition(be.getBlockPos());
+                // CRITICAL: Reconnect to nearby tanks during lazy loading
+                FluidPipeMultiblock.scanAndConnectToNearbyTanks(be.multiblock, pos, level);
                 be.joinedMultiblock = true;
-                be.setChanged();
-                Logger.sendMessage("FluidPipe BlockEntity at " + pos + " successfully joined multiblock " +
-                        be.multiblock.id.toString().substring(0, 8), true);
-            } else {
-                Logger.sendMessage("ERROR: FluidPipe BlockEntity at " + pos + " failed to load multiblock " +
-                        be.fluidPipeMultiblockId.toString().substring(0, 8), true);
             }
         }
     }
@@ -87,17 +69,11 @@ public class PortalFluidPipeBlockEntity extends BlockEntity {
 
         if(multiblock != null) {
             tag.putUUID("fluidPipeMultiblockId", multiblock.id);
-          //  Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " saving multiblock ID: " +
-              //      multiblock.id.toString().substring(0, 8), true);
         } else if(fluidPipeMultiblockId != null) {
             tag.putUUID("fluidPipeMultiblockId", fluidPipeMultiblockId);
-         //   Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " saving stored multiblock ID: " +
-                //    fluidPipeMultiblockId.toString().substring(0, 8), true);
         }
 
         tag.put("Fluid", fluidTank.writeToNBT(new CompoundTag()));
-        //Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " saving fluid: " +
-          //      fluidTank.getFluidAmount() + "/" + fluidTank.getCapacity() + " mB", true);
     }
 
     public void setMultiblock(FluidPipeMultiblock multiblock) {
@@ -105,8 +81,6 @@ public class PortalFluidPipeBlockEntity extends BlockEntity {
         if (multiblock != null) {
             this.fluidPipeMultiblockId = multiblock.id;
             this.joinedMultiblock = true;
-            Logger.sendMessage("FluidPipe BlockEntity at " + worldPosition + " set multiblock to " +
-                    multiblock.id.toString().substring(0, 8), true);
         }
     }
 

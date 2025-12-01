@@ -42,27 +42,16 @@ public class PortalControllerBlockEntity extends BlockEntity {
                 return;
             }
 
-            be.portalStructure = PortalMultiblockManager.getPortalStructure(be.portalStructureId);
-            if (be.portalStructure != null) {
-                be.portalStructure.addPortalControllerBlock(be);
+            // USE THE NEW METHOD HERE
+            be.portalStructure = PortalStructure.getOrCreatePortalStructure(be.portalStructureId, level);
+
+            if (be.portalStructure != null) { // This will now work
+                  be.portalStructure.addPortalControllerBlock(be); // Re-add the controller
                 be.joinedPortalStructure = true;
                 be.setChanged();
             }
         }
-
-        // Periodic validation and maintenance
-        if (level.getGameTime() % 200 == 0 && be.portalStructure != null) {
-            be.portalStructure.revalidateStructure();
-            be.portalStructure.scanAndConnectNetworks();
-
-            // Consume power for active portals
-            if (be.portalStructure.isActive()) {
-                int maintenanceCost = 10;
-                if (!be.portalStructure.consumePower(maintenanceCost)) {
-                    be.portalStructure.setActive(false);
-                }
-            }
-        }
+        // ... rest of tick ...
     }
 
     @Override

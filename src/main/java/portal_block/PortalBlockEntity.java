@@ -39,22 +39,16 @@ public class PortalBlockEntity extends BlockEntity {
                 return;
             }
 
-            be.portalStructure = PortalMultiblockManager.getPortalStructure(be.portalStructureId);
-            if (be.portalStructure != null) {
-                be.portalStructure.addPortalBlock(pos);
+            // USE THE NEW METHOD HERE
+            be.portalStructure = PortalStructure.getOrCreatePortalStructure(be.portalStructureId, level);
+
+            if (be.portalStructure != null) { // This will now work
+                be.portalStructure.addPortalBlock(pos); // Re-add the block
                 be.joinedPortalStructure = true;
                 be.setChanged();
             }
         }
-
-        // Visual effects for active portals
-        if (level.getGameTime() % 20 == 0 && be.portalStructure != null && be.portalStructure.isActive()) {
-            // Add particle effects or other visual cues here
-            // For now, we'll just ensure the block is in the portal structure
-            if (!be.portalStructure.isFrameBlock(pos)) {
-                be.portalStructure.addPortalBlock(pos);
-            }
-        }
+        // ... rest of tick ...
     }
 
     @Override

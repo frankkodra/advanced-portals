@@ -9,6 +9,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor; // <-- NEW IMPORT: Required for updateShape to properly override
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
@@ -196,9 +197,7 @@ public class PortalPowerCableBlock extends BaseEntityBlock {
         super.onPlace(blockState, level, pos, blockState2, isMoving);
 
         // Notify neighboring blocks when this block is placed
-        if (!level.isClientSide) {
-            level.updateNeighborsAt(pos, blockState.getBlock());
-        }
+
     }
 
     @Override
@@ -228,20 +227,10 @@ public class PortalPowerCableBlock extends BaseEntityBlock {
         // FIXED: Don't pass multiblock to constructor - it will be set later
         return new PortalPowerCableBlockEntity(pos, state);
     }
+    @Nullable
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
-        // Only tick on the server side (not client)
-        if (level.isClientSide) {
-            return null;
-        }
-
-        // You must replace 'ModBlockEntities.PORTAL_POWERCABLE_BLOCK_ENTITY'
-        // with the actual deferred register object for your PortalPowerCableBlockEntity.
-        // Assuming you have a class like 'ModBlockEntities' that holds the BlockEntityType:
-        return createTickerHelper(
-                type,
-                PortalBlockEntities.PORTAL_POWERCABLE_BLOCK_ENTITY.get(), // Your BlockEntityType
-                PortalPowerCableBlockEntity::tick // Your static tick method
-        );
+        return createTickerHelper(type, PortalBlockEntities.PORTAL_POWERCABLE_BLOCK_ENTITY.get(),
+                level.isClientSide ? null : PortalPowerCableBlockEntity::tick);
     }
 }

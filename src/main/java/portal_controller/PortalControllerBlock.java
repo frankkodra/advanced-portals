@@ -1,5 +1,6 @@
 package portal_controller;
 
+import advanced_portals.PortalBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
@@ -9,6 +10,7 @@ import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
@@ -103,18 +105,11 @@ public class PortalControllerBlock extends BaseEntityBlock {
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
         return new PortalControllerBlockEntity(pos, state);
     }
-
     @Nullable
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
-        if (level.isClientSide()) {
-            return null;
-        }
-
-        return createTickerHelper(
-                type,
-                advanced_portals.PortalBlockEntities.PORTAL_CONTROLLER_BLOCK_ENTITY.get(),
-                PortalControllerBlockEntity::tick
-        );
+        return createTickerHelper(type, PortalBlockEntities.PORTAL_CONTROLLER_BLOCK_ENTITY.get(),
+                level.isClientSide ? null : PortalControllerBlockEntity::tick);
     }
+
 }

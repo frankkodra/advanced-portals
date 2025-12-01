@@ -9,6 +9,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
@@ -21,16 +22,12 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jetbrains.annotations.Nullable;
-import portal_battery.PortalBatteryBlock;
-import portal_block.PortalBlock;
-import portal_controller.PortalControllerBlock;
 import portal_fluid_tank.PortalFluidTankBlock;
 
 import java.util.HashMap;
 import java.util.Map;
 
 public class PortalFluidPipeBlock extends BaseEntityBlock {
-
     public static final BooleanProperty NORTH = BooleanProperty.create("north");
     public static final BooleanProperty EAST = BooleanProperty.create("east");
     public static final BooleanProperty SOUTH = BooleanProperty.create("south");
@@ -126,9 +123,7 @@ public class PortalFluidPipeBlock extends BaseEntityBlock {
         BlockState neighborState = world.getBlockState(neighborPos);
 
         return neighborState.getBlock() instanceof PortalFluidPipeBlock ||
-                neighborState.getBlock() instanceof PortalFluidTankBlock ||
-                neighborState.getBlock() instanceof PortalControllerBlock ||
-                neighborState.getBlock() instanceof PortalBlock;
+                neighborState.getBlock() instanceof PortalFluidTankBlock;
     }
 
     private BooleanProperty getPropertyForDirection(Direction direction) {
@@ -158,10 +153,6 @@ public class PortalFluidPipeBlock extends BaseEntityBlock {
         }
 
         super.onPlace(blockState, level, pos, blockState2, isMoving);
-
-        if (!level.isClientSide) {
-            level.updateNeighborsAt(pos, blockState.getBlock());
-        }
     }
 
     @Override
@@ -188,16 +179,10 @@ public class PortalFluidPipeBlock extends BaseEntityBlock {
         return new PortalFluidPipeBlockEntity(pos, state);
     }
 
+    @Nullable
     @Override
     public <T extends BlockEntity> BlockEntityTicker<T> getTicker(Level level, BlockState state, BlockEntityType<T> type) {
-        if (level.isClientSide) {
-            return null;
-        }
-
-        return createTickerHelper(
-                type,
-                PortalBlockEntities.PORTAL_FLUIDPIPE_BLOCK_ENTITY.get(),
-                PortalFluidPipeBlockEntity::tick
-        );
+        return createTickerHelper(type, PortalBlockEntities.PORTAL_FLUIDPIPE_BLOCK_ENTITY.get(),
+                level.isClientSide ? null : PortalFluidPipeBlockEntity::tick);
     }
 }
