@@ -25,6 +25,7 @@ public class PortalMultiblockManager {
     public  static Map<UUID, TankMultiblock> tankMultiblocks = new HashMap<>();
     public  static Map<UUID, FluidPipeMultiblock> fluidPipeMultiblocks = new HashMap<>();
 
+
     @SubscribeEvent
     public static void onServerStopping(ServerStoppingEvent event) {
         batteryMultiblocks.clear();
@@ -153,13 +154,15 @@ public class PortalMultiblockManager {
         portalNameToId.remove(name);
     }
 
-    public static void updatePortalName(String oldName, String newName, UUID portalId) {
+    public static boolean updatePortalName(String oldName, String newName, UUID portalId) {
         if (oldName != null) {
             portalNameToId.remove(oldName);
         }
-        if (newName != null && !newName.isEmpty()) {
+        if (newName != null && !newName.isEmpty()&&!portalNameToId.containsKey(newName)) {
             portalNameToId.put(newName, portalId);
+            return true;
         }
+        return false;
     }
 
     // Multiblock cleanup and maintenance methods
@@ -315,4 +318,23 @@ public class PortalMultiblockManager {
     public static void addPortalStructure(PortalStructure portalStructure) {
         portals.put(portalStructure.getPortalId(), portalStructure);
     }
+    public static boolean isNameTaken(String name, UUID excludeId) {
+        UUID existingId = portalNameToId.get(name);
+        return existingId != null && !existingId.equals(excludeId);
+    }
+
+    /**
+     * Renames a portal and updates the static maps.
+     */
+    public static void renamePortal(PortalStructure portal, String oldName, String newName) {
+        if (!oldName.isEmpty() && portalNameToId.containsKey(oldName)) {
+            portalNameToId.remove(oldName);
+        }
+        portal.getSettings().setPortalName(newName);
+        portalNameToId.put(newName, portal.getPortalId());
+        portal.markForSave();
+    }
+
+
+
 }

@@ -27,7 +27,6 @@ public class PortalControllerMenuProvider implements MenuProvider {
     @Nullable
     @Override
     public AbstractContainerMenu createMenu(int containerId, Inventory playerInventory, Player player) {
-        // We'll implement the actual menu later
         return new PortalControllerMenu(containerId, playerInventory, portalId, controllerPos);
     }
 }

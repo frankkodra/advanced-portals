@@ -15,6 +15,7 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.slf4j.Logger;
+import portal_controller.PortalControllerScreen;
 
 @Mod(AdvancedPortals.MODID)
 public class AdvancedPortals {
@@ -26,12 +27,14 @@ public class AdvancedPortals {
 
         // Register setup methods
         modEventBus.addListener(this::commonSetup);
+        modEventBus.addListener(this::onClientSetup);
 
         // Register portal system registries IN ORDER
         PortalBlocks.BLOCKS.register(modEventBus);
         ItemRegistry.ITEMS.register(modEventBus);
         PortalBlockEntities.BLOCK_ENTITIES.register(modEventBus);
         CreativeTabRegistry.CREATIVE_MODE_TABS.register(modEventBus);
+        MenuRegistry.MENUS.register(modEventBus); // Add this line
 
         // Register event handlers
         MinecraftForge.EVENT_BUS.register(this);
@@ -40,11 +43,11 @@ public class AdvancedPortals {
         modEventBus.addListener(this::addCreative);
     }
 
-    private void commonSetup(final FMLCommonSetupEvent event) {
+    public void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Advanced Portals mod initialized");
     }
 
-    private void addCreative(BuildCreativeModeTabContentsEvent event) {
+    public void addCreative(BuildCreativeModeTabContentsEvent event) {
         if (event.getTabKey() == CreativeModeTabs.FUNCTIONAL_BLOCKS) {
             // Optional: Add items to functional blocks tab
             event.accept(ItemRegistry.PORTAL_BLOCK_ITEM.get());
@@ -59,11 +62,18 @@ public class AdvancedPortals {
         LOGGER.info("Advanced Portals server starting");
     }
 
-    @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
-    public static class ClientModEvents {
-        @SubscribeEvent
-        public static void onClientSetup(FMLClientSetupEvent event) {
-            LOGGER.info("Advanced Portals client setup complete");
-        }
+
+
+    public void onClientSetup(final FMLClientSetupEvent event) {
+        // This must be run on the main game thread
+        event.enqueueWork(() -> {
+            // Register your screen. Replace 'MenuRegistry' and 'PortalControllerScreen'
+            // with the exact names of your classes.
+            net.minecraft.client.gui.screens.MenuScreens.register(
+                    MenuRegistry.PORTAL_CONTROLLER_MENU.get(),
+                    PortalControllerScreen::new
+            );
+        });
     }
+
 }

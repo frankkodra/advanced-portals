@@ -75,7 +75,7 @@ public class FluidPipeMultiblock {
     }
 
     public static void scanAndConnectToNearbyTanks(FluidPipeMultiblock pipe, BlockPos pos, Level level) {
-        Set<TankMultiblock> tanks = findAdjacentTanksForRepopulation(pos, level);
+        Set<TankMultiblock> tanks = findAdjacentTanksForRepopulation(pipe,pos, level);
         Logger.sendMessage("REPOPULATION: Scanning for tanks near pipe at " + pos + " - found " + tanks.size() + " tanks", true);
         for (TankMultiblock tank : tanks) {
             pipe.addTankConnection(tank, pos);
@@ -130,7 +130,7 @@ public class FluidPipeMultiblock {
         return tanks;
     }
 
-    private static Set<TankMultiblock> findAdjacentTanksForRepopulation(BlockPos pos, Level level) {
+    private static Set<TankMultiblock> findAdjacentTanksForRepopulation(FluidPipeMultiblock pipe,BlockPos pos, Level level) {
         Set<TankMultiblock> tanks = new HashSet<>();
         for (Direction direction : Direction.values()) {
             BlockPos neighborPos = pos.relative(direction);
@@ -148,6 +148,7 @@ public class FluidPipeMultiblock {
                     }
                     if (tankMultiblock != null) {
                         tanks.add(tankMultiblock);
+
                     }
                 }
             }

@@ -2,11 +2,14 @@ package portal_multiblock;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraftforge.fml.common.Mod;
+import net.minecraft.world.level.block.state.BlockState;
 import portal_battery.BatteryMultiblock;
 import portal_block.PortalBlock;
 import portal_block.PortalBlockEntity;
@@ -19,33 +22,41 @@ import advanced_portals.Logger;
 
 import java.util.*;
 
-import static portal_multiblock.PortalMultiblockManager.portals;
-
 public class PortalStructure {
     private final UUID portalId;
-    private String portalName;
-    public Set<PortalControllerBlockEntity> portalControllers;
+    public final PortalSettings settings;
+    private final Set<PortalControllerBlockEntity> portalControllers;
     private final Set<BlockPos> frameBlocks;
     private final Set<BlockPos> interiorBlocks;
+
+    // Primary storage system
+    private BlockPos primaryStoragePos;
+    private UUID primaryStorageBlockId;
+    private boolean hasStoredData;
 
     // CRITICAL: Track cable/pipe connections bidirectionally with specific positions
     public Map<UUID, Set<BlockPos>> connectedPowerCableMultiblocksMap;
     public Map<UUID, Set<BlockPos>> connectedFluidPipeMultiblocksMap;
 
-    private boolean isValid;
+    public boolean isValid;
     private boolean isActive;
     private final Level level;
-    private final List<UUID> linkedPortals;
-    private ResourceKey<Level> levelKey;
+    private final ResourceKey<Level> levelKey;
+
+    // Portal bounds for entity detection
+    private PortalBounds bounds;
+
+    // Track if we need to save data (for primary storage block)
+    private boolean needsSave;
 
     public PortalStructure(UUID portalId, Level level) {
         this.portalId = portalId;
-        this.portalName = "Portal_" + portalId.toString().substring(0, 8);
+        this.settings = new PortalSettings();
+        this.settings.setPortalName("Portal_" + portalId.toString().substring(0, 8));
         this.frameBlocks = new HashSet<>();
         this.interiorBlocks = new HashSet<>();
         this.connectedPowerCableMultiblocksMap = new HashMap<>();
         this.connectedFluidPipeMultiblocksMap = new HashMap<>();
-        this.linkedPortals = new ArrayList<>();
 
         this.level = level;
         this.isValid = false;
@@ -53,10 +64,271 @@ public class PortalStructure {
         this.levelKey = level.dimension();
         this.portalControllers = new HashSet<>();
 
+        this.primaryStoragePos = null;
+        this.primaryStorageBlockId = null;
+        this.hasStoredData = false;
+        this.needsSave = false;
+        this.bounds = null;
+
         PortalMultiblockManager.addPortalStructure(this);
         Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " created", true);
     }
 
+    // PRIMARY STORAGE SYSTEM METHODS
+
+    public void setPrimaryStorage(BlockPos pos, BlockEntity blockEntity) {
+        this.primaryStoragePos = pos;
+        this.primaryStorageBlockId = UUID.randomUUID();
+        this.hasStoredData = true;
+
+        // Mark block entity as primary storage
+        if (blockEntity instanceof PortalBlockEntity portalBE) {
+            portalBE.setPrimaryStorage(true, primaryStorageBlockId);
+        } else if (blockEntity instanceof PortalControllerBlockEntity controllerBE) {
+            controllerBE.setPrimaryStorage(true, primaryStorageBlockId);
+        }
+
+        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                " primary storage set to block at " + pos, true);
+
+        markForSave();
+    }
+
+    public boolean isPrimaryStorage(BlockPos pos, BlockEntity blockEntity) {
+        if (primaryStoragePos == null) return false;
+
+        if (primaryStoragePos.equals(pos)) {
+            return true;
+        }
+
+        // Check by storage ID for failover
+        if (blockEntity != null) {
+            UUID blockStorageId = null;
+            if (blockEntity instanceof PortalBlockEntity portalBE) {
+                blockStorageId = portalBE.getStorageId();
+            } else if (blockEntity instanceof PortalControllerBlockEntity controllerBE) {
+                blockStorageId = controllerBE.getStorageId();
+            }
+
+            return primaryStorageBlockId != null && primaryStorageBlockId.equals(blockStorageId);
+        }
+
+        return false;
+    }
+
+    public boolean needsPrimaryStorage() {
+        return primaryStoragePos == null && !frameBlocks.isEmpty();
+    }
+
+    public void transferPrimaryStorage() {
+        if (!needsPrimaryStorage()) return;
+
+        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                " transferring primary storage", true);
+
+        // Try portal blocks first
+        for (BlockPos pos : frameBlocks) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be != null) {
+                setPrimaryStorage(pos, be);
+                be.setChanged();
+                return;
+            }
+        }
+
+        // Fall back to controllers
+        for (PortalControllerBlockEntity controller : portalControllers) {
+            setPrimaryStorage(controller.getBlockPos(), controller);
+            controller.setChanged();
+            return;
+        }
+
+        Logger.sendMessage("WARNING: Could not find valid block for primary storage", true);
+    }
+
+    // DATA PERSISTENCE METHODS
+
+    public CompoundTag saveToNBT() {
+        CompoundTag tag = new CompoundTag();
+
+        // Basic portal data
+        tag.putUUID("portalId", portalId);
+        tag.putString("portalName", settings.getPortalName());
+        tag.putBoolean("isValid", isValid);
+        tag.putBoolean("isActive", isActive);
+        tag.putBoolean("hasStoredData", hasStoredData);
+
+        // Settings
+        tag.put("settings", settings.save());
+
+        // Primary storage info
+        if (primaryStoragePos != null) {
+            tag.putInt("primaryX", primaryStoragePos.getX());
+            tag.putInt("primaryY", primaryStoragePos.getY());
+            tag.putInt("primaryZ", primaryStoragePos.getZ());
+        }
+        if (primaryStorageBlockId != null) {
+            tag.putUUID("primaryStorageId", primaryStorageBlockId);
+        }
+
+        // Frame blocks
+        ListTag frameList = new ListTag();
+        for (BlockPos pos : frameBlocks) {
+            CompoundTag posTag = new CompoundTag();
+            posTag.putInt("x", pos.getX());
+            posTag.putInt("y", pos.getY());
+            posTag.putInt("z", pos.getZ());
+            frameList.add(posTag);
+        }
+        tag.put("frameBlocks", frameList);
+
+        // Connected portals (from settings)
+        ListTag linkedList = new ListTag();
+        for (UUID linkedId : settings.getLinkedPortals()) {
+            CompoundTag linkedTag = new CompoundTag();
+            linkedTag.putUUID("portalId", linkedId);
+            linkedList.add(linkedTag);
+        }
+        tag.put("linkedPortals", linkedList);
+
+        // Cable connections
+        CompoundTag cableConnections = new CompoundTag();
+        for (Map.Entry<UUID, Set<BlockPos>> entry : connectedPowerCableMultiblocksMap.entrySet()) {
+            ListTag cableList = new ListTag();
+            for (BlockPos pos : entry.getValue()) {
+                CompoundTag posTag = new CompoundTag();
+                posTag.putInt("x", pos.getX());
+                posTag.putInt("y", pos.getY());
+                posTag.putInt("z", pos.getZ());
+                cableList.add(posTag);
+            }
+            cableConnections.put(entry.getKey().toString(), cableList);
+        }
+        tag.put("cableConnections", cableConnections);
+
+        // Pipe connections
+        CompoundTag pipeConnections = new CompoundTag();
+        for (Map.Entry<UUID, Set<BlockPos>> entry : connectedFluidPipeMultiblocksMap.entrySet()) {
+            ListTag pipeList = new ListTag();
+            for (BlockPos pos : entry.getValue()) {
+                CompoundTag posTag = new CompoundTag();
+                posTag.putInt("x", pos.getX());
+                posTag.putInt("y", pos.getY());
+                posTag.putInt("z", pos.getZ());
+                pipeList.add(posTag);
+            }
+            pipeConnections.put(entry.getKey().toString(), pipeList);
+        }
+        tag.put("pipeConnections", pipeConnections);
+
+        return tag;
+    }
+
+    public void loadFromNBT(CompoundTag tag) {
+        // Basic portal data
+        settings.setPortalName(tag.getString("portalName"));
+        isValid = tag.getBoolean("isValid");
+        isActive = tag.getBoolean("isActive");
+        hasStoredData = tag.getBoolean("hasStoredData");
+
+        // Settings
+        if (tag.contains("settings")) {
+            settings.load(tag.getCompound("settings"));
+        }
+
+        // Primary storage
+        if (tag.contains("primaryX")) {
+            primaryStoragePos = new BlockPos(
+                    tag.getInt("primaryX"),
+                    tag.getInt("primaryY"),
+                    tag.getInt("primaryZ")
+            );
+        }
+        if (tag.contains("primaryStorageId")) {
+            primaryStorageBlockId = tag.getUUID("primaryStorageId");
+        }
+
+        // Frame blocks (will be re-added by block entities)
+        if (tag.contains("frameBlocks")) {
+            ListTag frameList = tag.getList("frameBlocks", Tag.TAG_COMPOUND);
+            for (int i = 0; i < frameList.size(); i++) {
+                CompoundTag posTag = frameList.getCompound(i);
+                BlockPos pos = new BlockPos(
+                        posTag.getInt("x"),
+                        posTag.getInt("y"),
+                        posTag.getInt("z")
+                );
+                frameBlocks.add(pos);
+            }
+        }
+
+        // Linked portals
+        if (tag.contains("linkedPortals")) {
+            ListTag linkedList = tag.getList("linkedPortals", Tag.TAG_COMPOUND);
+            for (int i = 0; i < linkedList.size(); i++) {
+                CompoundTag linkedTag = linkedList.getCompound(i);
+                settings.addLinkedPortal(linkedTag.getUUID("portalId"));
+            }
+        }
+
+        // Cable connections
+        if (tag.contains("cableConnections")) {
+            CompoundTag cableConnections = tag.getCompound("cableConnections");
+            for (String cableIdStr : cableConnections.getAllKeys()) {
+                UUID cableId = UUID.fromString(cableIdStr);
+                ListTag cableList = cableConnections.getList(cableIdStr, Tag.TAG_COMPOUND);
+                Set<BlockPos> positions = new HashSet<>();
+
+                for (int i = 0; i < cableList.size(); i++) {
+                    CompoundTag posTag = cableList.getCompound(i);
+                    positions.add(new BlockPos(
+                            posTag.getInt("x"),
+                            posTag.getInt("y"),
+                            posTag.getInt("z")
+                    ));
+                }
+
+                connectedPowerCableMultiblocksMap.put(cableId, positions);
+            }
+        }
+
+        // Pipe connections
+        if (tag.contains("pipeConnections")) {
+            CompoundTag pipeConnections = tag.getCompound("pipeConnections");
+            for (String pipeIdStr : pipeConnections.getAllKeys()) {
+                UUID pipeId = UUID.fromString(pipeIdStr);
+                ListTag pipeList = pipeConnections.getList(pipeIdStr, Tag.TAG_COMPOUND);
+                Set<BlockPos> positions = new HashSet<>();
+
+                for (int i = 0; i < pipeList.size(); i++) {
+                    CompoundTag posTag = pipeList.getCompound(i);
+                    positions.add(new BlockPos(
+                            posTag.getInt("x"),
+                            posTag.getInt("y"),
+                            posTag.getInt("z")
+                    ));
+                }
+
+                connectedFluidPipeMultiblocksMap.put(pipeId, positions);
+            }
+        }
+
+        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                " loaded from NBT", true);
+    }
+
+    // MARK FOR SAVE (called when data changes)
+    public void markForSave() {
+        needsSave = true;
+        if (primaryStoragePos != null) {
+            BlockEntity be = level.getBlockEntity(primaryStoragePos);
+            if (be != null) {
+                be.setChanged();
+            }
+        }
+    }
+
+    // Existing static methods from original (unchanged except for calls to new methods)
     public static PortalStructure addCreateOrMergePortalStructureForBlock(BlockPos pos, Level level) {
         Set<PortalStructure> multiblocksToMerge = new HashSet<PortalStructure>();
         Block addedBlock = level.getBlockState(pos).getBlock();
@@ -193,13 +465,120 @@ public class PortalStructure {
         }
     }
 
-    public void addPortalControllerBlock(PortalControllerBlockEntity block) {
-        portalControllers.add(block);
-        block.setPortalStructure(this);
+    // Updated addPortalBlock method with primary storage logic
+    public void addPortalBlock(BlockPos pos) {
+        frameBlocks.add(pos);
+
+        // FIRST BLOCK BECOMES PRIMARY STORAGE
+        if (primaryStoragePos == null && frameBlocks.size() == 1) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be != null) {
+                setPrimaryStorage(pos, be);
+            }
+        }
+
         Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
-                " added controller at " + block.getBlockPos() + " (total: " + portalControllers.size() + " controllers)", true);
+                " added portal block at " + pos + " (total: " + frameBlocks.size() + " frame blocks)", true);
+
+        revalidateStructure();
     }
 
+    // Updated addPortalControllerBlock method with primary storage logic
+    public void addPortalControllerBlock(PortalControllerBlockEntity controller) {
+        portalControllers.add(controller);
+        controller.setPortalStructure(this);
+
+        // FIRST CONTROLLER BECOMES PRIMARY STORAGE (if no portal blocks yet)
+        if (primaryStoragePos == null && portalControllers.size() == 1 && frameBlocks.isEmpty()) {
+            setPrimaryStorage(controller.getBlockPos(), controller);
+        }
+
+        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                " added controller at " + controller.getBlockPos() + " (total: " + portalControllers.size() + " controllers)", true);
+
+        revalidateStructure();
+    }
+
+    private void addPortalControllerBlocks(Set<PortalControllerBlockEntity> portalControllers) {
+        this.portalControllers.addAll(portalControllers);
+    }
+
+    private void addPortalBlocks(Set<BlockPos> frameBlocks) {
+        this.frameBlocks.addAll(frameBlocks);
+    }
+
+    private void addPowerCableMultiblocks(Map<UUID, Set<BlockPos>> powerCablesMap) {
+        for (Map.Entry<UUID, Set<BlockPos>> entry : powerCablesMap.entrySet()) {
+            UUID cableId = entry.getKey();
+            Set<BlockPos> connectionPoints = entry.getValue();
+
+            if (!this.connectedPowerCableMultiblocksMap.containsKey(cableId)) {
+                this.connectedPowerCableMultiblocksMap.put(cableId, new HashSet<>());
+            }
+            this.connectedPowerCableMultiblocksMap.get(cableId).addAll(connectionPoints);
+        }
+    }
+
+    private void addFluidPipeMultiblocks(Map<UUID, Set<BlockPos>> fluidPipesMap) {
+        for (Map.Entry<UUID, Set<BlockPos>> entry : fluidPipesMap.entrySet()) {
+            UUID pipeId = entry.getKey();
+            Set<BlockPos> connectionPoints = entry.getValue();
+
+            if (!this.connectedFluidPipeMultiblocksMap.containsKey(pipeId)) {
+                this.connectedFluidPipeMultiblocksMap.put(pipeId, new HashSet<>());
+            }
+            this.connectedFluidPipeMultiblocksMap.get(pipeId).addAll(connectionPoints);
+        }
+    }
+
+    // Updated removePortalBlock with primary storage failover
+    public void removePortalBlock(BlockPos pos) {
+        boolean wasPrimary = isPrimaryStorage(pos, level.getBlockEntity(pos));
+
+        if (frameBlocks.remove(pos)) {
+            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                    " removed portal block at " + pos + " (total: " + frameBlocks.size() + " frame blocks remaining)", true);
+
+            if (wasPrimary) {
+                Logger.sendMessage("Primary storage block removed, transferring data", true);
+                primaryStoragePos = null;
+                primaryStorageBlockId = null;
+                transferPrimaryStorage();
+            }
+
+            if (frameBlocks.isEmpty()) {
+                PortalMultiblockManager.removePortalStructure(this);
+                Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " DESTROYED (no frame blocks remaining)", true);
+            } else {
+                // CRITICAL: Check if removal caused structure to split
+                handleSplitAfterRemoval();
+                // VALIDATION: Run validation after block removal
+                revalidateStructure();
+            }
+        }
+    }
+
+    // Updated removePortalController with primary storage failover
+    public void removePortalController(PortalControllerBlockEntity controller) {
+        boolean wasPrimary = isPrimaryStorage(controller.getBlockPos(), controller);
+
+        if (portalControllers.remove(controller)) {
+            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                    " removed controller at " + controller.getBlockPos() + " (total: " + portalControllers.size() + " controllers remaining)", true);
+
+            if (wasPrimary) {
+                Logger.sendMessage("Primary storage controller removed, transferring data", true);
+                primaryStoragePos = null;
+                primaryStorageBlockId = null;
+                transferPrimaryStorage();
+            }
+
+            // VALIDATION: Run validation after controller removal
+            revalidateStructure();
+        }
+    }
+
+    // Existing mergeMultiblocks method (unchanged except for calls to new methods)
     public static PortalStructure mergeMultiblocks(Set<PortalStructure> multiblocksToMerge, Level level) {
         if (multiblocksToMerge.isEmpty()) {
             Logger.sendMessage("ERROR: Cannot merge empty PortalStructure set!", true);
@@ -284,66 +663,360 @@ public class PortalStructure {
                 multiblock.portalId.toString().substring(0, 8), true);
     }
 
-    private void addPortalControllerBlocks(Set<PortalControllerBlockEntity> portalControllers) {
-        this.portalControllers.addAll(portalControllers);
-    }
-
-    private void addPortalBlocks(Set<BlockPos> frameBlocks) {
-        this.frameBlocks.addAll(frameBlocks);
-    }
-
-    private void addPowerCableMultiblocks(Map<UUID, Set<BlockPos>> powerCablesMap) {
-        for (Map.Entry<UUID, Set<BlockPos>> entry : powerCablesMap.entrySet()) {
-            UUID cableId = entry.getKey();
-            Set<BlockPos> connectionPoints = entry.getValue();
-
-            if (!this.connectedPowerCableMultiblocksMap.containsKey(cableId)) {
-                this.connectedPowerCableMultiblocksMap.put(cableId, new HashSet<>());
-            }
-            this.connectedPowerCableMultiblocksMap.get(cableId).addAll(connectionPoints);
-        }
-    }
-
-    private void addFluidPipeMultiblocks(Map<UUID, Set<BlockPos>> fluidPipesMap) {
-        for (Map.Entry<UUID, Set<BlockPos>> entry : fluidPipesMap.entrySet()) {
-            UUID pipeId = entry.getKey();
-            Set<BlockPos> connectionPoints = entry.getValue();
-
-            if (!this.connectedFluidPipeMultiblocksMap.containsKey(pipeId)) {
-                this.connectedFluidPipeMultiblocksMap.put(pipeId, new HashSet<>());
-            }
-            this.connectedFluidPipeMultiblocksMap.get(pipeId).addAll(connectionPoints);
-        }
-    }
-
-    public void addPortalBlock(BlockPos pos) {
-        frameBlocks.add(pos);
+    // UPDATED: Enhanced split handling similar to TankMultiblock
+    private void handleSplitAfterRemoval() {
         Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
-                " added portal block at " + pos + " (total: " + frameBlocks.size() + " frame blocks)", true);
+                " checking for split", true);
+
+        // Find all connected components in the frame
+        List<Set<BlockPos>> disconnectedComponents = findDisconnectedComponents();
+
+        if (disconnectedComponents.size() <= 1) {
+            // Still one connected component, no split occurred
+            Logger.sendMessage("Split check: Structure remains connected", true);
+            return;
+        }
+
+        Logger.sendMessage("Split check: Structure split into " + disconnectedComponents.size() +
+                " components", true);
+
+        // Split the structure into components
+        splitIntoComponents(disconnectedComponents);
     }
 
-    public void removePortalBlock(BlockPos pos) {
-        if (frameBlocks.remove(pos)) {
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
-                    " removed portal block at " + pos + " (total: " + frameBlocks.size() + " frame blocks remaining)", true);
+    // Find disconnected components using flood fill
+    private List<Set<BlockPos>> findDisconnectedComponents() {
+        Set<BlockPos> visited = new HashSet<>();
+        List<Set<BlockPos>> components = new ArrayList<>();
 
-            if (frameBlocks.isEmpty()) {
-                PortalMultiblockManager.removePortalStructure(this);
-                Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " DESTROYED (no frame blocks remaining)", true);
-            } else {
-                // VALIDATION: Run validation after block removal (could cause split)
-                revalidateStructure();
+        for (BlockPos startPos : frameBlocks) {
+            if (!visited.contains(startPos)) {
+                Set<BlockPos> component = new HashSet<>();
+                floodFill(startPos, component, visited);
+                components.add(component);
+            }
+        }
+
+        return components;
+    }
+
+    // Flood fill algorithm for finding connected components
+    private void floodFill(BlockPos start, Set<BlockPos> component, Set<BlockPos> visited) {
+        if (visited.contains(start)) return;
+        visited.add(start);
+        component.add(start);
+
+        // Check ALL 6 directions for 3D connectivity
+        for (Direction direction : Direction.values()) {
+            BlockPos neighbor = start.relative(direction);
+            if (frameBlocks.contains(neighbor)) {
+                floodFill(neighbor, component, visited);
             }
         }
     }
 
-    public void removePortalController(PortalControllerBlockEntity controller) {
-        if (portalControllers.remove(controller)) {
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
-                    " removed controller at " + controller.getBlockPos() + " (total: " + portalControllers.size() + " controllers remaining)", true);
+    // Split the portal structure into multiple components (similar to TankMultiblock)
+    private void splitIntoComponents(List<Set<BlockPos>> components) {
+        // Store the original portal ID
+        UUID originalPortalId = this.portalId;
 
-            // VALIDATION: Run validation after controller removal
-            revalidateStructure();
+        // First component keeps the original portal structure
+        Set<BlockPos> mainComponent = components.get(0);
+
+        // Clear and reset the original portal structure with main component
+        this.frameBlocks.clear();
+        this.frameBlocks.addAll(mainComponent);
+
+        // Reassign controllers based on proximity
+        reassignControllers(mainComponent);
+
+        // Update connections for the main component
+        updateConnectionsForComponent(mainComponent, true);
+
+        // Update all block entity references for the main component
+        updateBlockEntityReferencesForComponent(mainComponent);
+
+        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
+                " now has " + frameBlocks.size() + " frame blocks and " + portalControllers.size() + " controllers after split", true);
+
+        // Create new portal structures for other components
+        for (int i = 1; i < components.size(); i++) {
+            Set<BlockPos> component = components.get(i);
+            createNewPortalStructureForComponent(component, originalPortalId);
+        }
+
+        // Revalidate the main structure
+        revalidateStructure();
+    }
+
+    // Reassign controllers based on proximity to component
+    private void reassignControllers(Set<BlockPos> component) {
+        Set<PortalControllerBlockEntity> controllersToKeep = new HashSet<>();
+        Set<PortalControllerBlockEntity> controllersToRemove = new HashSet<>();
+
+        for (PortalControllerBlockEntity controller : portalControllers) {
+            if (isControllerAdjacentToComponent(controller, component)) {
+                controllersToKeep.add(controller);
+            } else {
+                controllersToRemove.add(controller);
+            }
+        }
+
+        // Update controllers
+        this.portalControllers.clear();
+        this.portalControllers.addAll(controllersToKeep);
+    }
+
+    // Check if controller is adjacent to any block in component
+    private boolean isControllerAdjacentToComponent(PortalControllerBlockEntity controller, Set<BlockPos> component) {
+        BlockPos controllerPos = controller.getBlockPos();
+        for (BlockPos framePos : component) {
+            double distance = controllerPos.distToCenterSqr(framePos.getX() + 0.5, framePos.getY() + 0.5, framePos.getZ() + 0.5);
+            if (distance <= 2.0) { // Adjacent or diagonal
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Update connections for a component
+    private void updateConnectionsForComponent(Set<BlockPos> component, boolean isMainComponent) {
+        Logger.sendMessage("Updating connections for " + (isMainComponent ? "main" : "new") + " portal structure", true);
+
+        // Update power cable connections
+        updateConnectionMap(component, connectedPowerCableMultiblocksMap, true);
+
+        // Update fluid pipe connections
+        updateConnectionMap(component, connectedFluidPipeMultiblocksMap, false);
+    }
+
+    // Helper method to update connection map
+    private void updateConnectionMap(Set<BlockPos> component, Map<UUID, Set<BlockPos>> connectionMap, boolean isPowerCable) {
+        for (Map.Entry<UUID, Set<BlockPos>> entry : new HashMap<>(connectionMap).entrySet()) {
+            UUID multiblockId = entry.getKey();
+            Set<BlockPos> connectionPoints = entry.getValue();
+
+            // Remove connection points that are no longer adjacent to this component
+            Set<BlockPos> pointsToRemove = new HashSet<>();
+            for (BlockPos connectionPoint : connectionPoints) {
+                if (!isPositionAdjacentToComponent(connectionPoint, component)) {
+                    pointsToRemove.add(connectionPoint);
+                }
+            }
+
+            // Remove the invalid connection points
+            connectionPoints.removeAll(pointsToRemove);
+
+            // If no connection points remain, remove the multiblock entirely
+            if (connectionPoints.isEmpty()) {
+                connectionMap.remove(multiblockId);
+                Logger.sendMessage("Removed " + (isPowerCable ? "power cable" : "fluid pipe") + " " +
+                        multiblockId.toString().substring(0, 8) + " - no valid connections", true);
+            } else if (!pointsToRemove.isEmpty()) {
+                Logger.sendMessage("Removed " + pointsToRemove.size() +
+                        " invalid connection points from " + (isPowerCable ? "power cable" : "fluid pipe") + " " +
+                        multiblockId.toString().substring(0, 8), true);
+            }
+
+            // Notify the multiblock about the removed connections
+            if (!pointsToRemove.isEmpty()) {
+                notifyMultiblockAboutRemovedConnections(multiblockId, pointsToRemove, isPowerCable);
+            }
+        }
+    }
+
+    // Check if position is adjacent to any block in component
+    private boolean isPositionAdjacentToComponent(BlockPos position, Set<BlockPos> component) {
+        for (BlockPos componentPos : component) {
+            double distance = position.distToCenterSqr(componentPos.getX() + 0.5, componentPos.getY() + 0.5, componentPos.getZ() + 0.5);
+            if (distance <= 2.0) { // Adjacent or diagonal
+                return true;
+            }
+        }
+
+        // Also check controllers
+        for (PortalControllerBlockEntity controller : portalControllers) {
+            BlockPos controllerPos = controller.getBlockPos();
+            double distance = position.distToCenterSqr(controllerPos.getX() + 0.5, controllerPos.getY() + 0.5, controllerPos.getZ() + 0.5);
+            if (distance <= 2.0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Notify multiblock about removed connections
+    private void notifyMultiblockAboutRemovedConnections(UUID multiblockId, Set<BlockPos> pointsToRemove, boolean isPowerCable) {
+        if (isPowerCable) {
+            PowerCableMultiblock cable = PortalMultiblockManager.getPowerCableMultiblock(multiblockId);
+            if (cable != null) {
+                for (BlockPos removedPoint : pointsToRemove) {
+                    cable.removePortalConnectionFromPortal(this.portalId, removedPoint);
+                }
+            }
+        } else {
+            FluidPipeMultiblock pipe = PortalMultiblockManager.getFluidPipeMultiblock(multiblockId);
+            if (pipe != null) {
+                for (BlockPos removedPoint : pointsToRemove) {
+                    pipe.removePortalConnectionFromPortal(this.portalId, removedPoint);
+                }
+            }
+        }
+    }
+
+    // Update block entity references for a component
+    private void updateBlockEntityReferencesForComponent(Set<BlockPos> component) {
+        for (BlockPos pos : component) {
+            BlockEntity blockEntity = level.getBlockEntity(pos);
+            if (blockEntity instanceof PortalBlockEntity) {
+                ((PortalBlockEntity) blockEntity).setPortalStructure(this);
+            }
+        }
+
+        for (PortalControllerBlockEntity controller : portalControllers) {
+            controller.setPortalStructure(this);
+        }
+    }
+
+    // Create a new portal structure for a component
+    private void createNewPortalStructureForComponent(Set<BlockPos> component, UUID originalPortalId) {
+        PortalStructure newStructure = new PortalStructure(UUID.randomUUID(), level);
+
+        // Add all frame blocks from this component to the new structure
+        for (BlockPos pos : component) {
+            newStructure.addPortalBlock(pos);
+        }
+
+        // Find and transfer controllers that belong to this component
+        transferControllersToNewStructure(newStructure, component);
+
+        Logger.sendMessage("Created new PortalStructure " + newStructure.portalId.toString().substring(0, 8) +
+                " with " + component.size() + " frame blocks and " + newStructure.portalControllers.size() + " controllers", true);
+
+        // Transfer connections to the new structure
+        transferConnectionsToNewStructure(newStructure, component, originalPortalId);
+
+        // Update all block entity references for the new structure
+        for (BlockPos pos : component) {
+            BlockEntity blockEntity = level.getBlockEntity(pos);
+            if (blockEntity instanceof PortalBlockEntity portalBE) {
+                portalBE.portalStructure = newStructure;
+            }
+        }
+
+        // Validate the new structure
+        newStructure.revalidateStructure();
+    }
+
+    // Transfer controllers to new structure
+    private void transferControllersToNewStructure(PortalStructure newStructure, Set<BlockPos> component) {
+        Iterator<PortalControllerBlockEntity> iterator = portalControllers.iterator();
+        while (iterator.hasNext()) {
+            PortalControllerBlockEntity controller = iterator.next();
+            if (isControllerAdjacentToComponent(controller, component)) {
+                newStructure.addPortalControllerBlock(controller);
+                iterator.remove();
+            }
+        }
+    }
+
+    // Transfer connections to a new portal structure
+    private void transferConnectionsToNewStructure(PortalStructure newStructure, Set<BlockPos> component, UUID originalPortalId) {
+        Logger.sendMessage("Transferring connections to new portal structure " +
+                newStructure.portalId.toString().substring(0, 8), true);
+
+        // Transfer power cable connections
+        transferConnectionMap(newStructure, component, connectedPowerCableMultiblocksMap, originalPortalId, true);
+
+        // Transfer fluid pipe connections
+        transferConnectionMap(newStructure, component, connectedFluidPipeMultiblocksMap, originalPortalId, false);
+    }
+
+    // Helper method to transfer connection map
+    private void transferConnectionMap(PortalStructure newStructure, Set<BlockPos> component,
+                                       Map<UUID, Set<BlockPos>> connectionMap, UUID originalPortalId,
+                                       boolean isPowerCable) {
+        for (Map.Entry<UUID, Set<BlockPos>> entry : connectionMap.entrySet()) {
+            UUID multiblockId = entry.getKey();
+            Set<BlockPos> connectionPoints = entry.getValue();
+
+            // Find connection points that belong to this new component
+            Set<BlockPos> pointsForNewStructure = new HashSet<>();
+            for (BlockPos connectionPoint : connectionPoints) {
+                if (isPositionAdjacentToComponent(connectionPoint, component)) {
+                    pointsForNewStructure.add(connectionPoint);
+                }
+            }
+
+            // If this multiblock has connections to this component, transfer them
+            if (!pointsForNewStructure.isEmpty()) {
+                Logger.sendMessage("Transferring " + pointsForNewStructure.size() +
+                        " connection points to new portal structure for " +
+                        (isPowerCable ? "power cable" : "fluid pipe") + " " +
+                        multiblockId.toString().substring(0, 8), true);
+
+                // Add connections to the new structure
+                for (BlockPos connectionPoint : pointsForNewStructure) {
+                    if (isPowerCable) {
+                        newStructure.addInternalPowerCableConnection(multiblockId, connectionPoint);
+                    } else {
+                        newStructure.addInternalFluidPipeConnection(multiblockId, connectionPoint);
+                    }
+                }
+
+                // Notify the multiblock about the transferred connections
+                notifyMultiblockAboutTransferredConnections(multiblockId, pointsForNewStructure,
+                        originalPortalId, newStructure.portalId, isPowerCable);
+            }
+        }
+    }
+
+    // Internal method to add power cable connection (for transfer)
+    private void addInternalPowerCableConnection(UUID cableId, BlockPos connectionPoint) {
+        if (!connectedPowerCableMultiblocksMap.containsKey(cableId)) {
+            connectedPowerCableMultiblocksMap.put(cableId, new HashSet<>());
+        }
+        connectedPowerCableMultiblocksMap.get(cableId).add(connectionPoint);
+    }
+
+    // Internal method to add fluid pipe connection (for transfer)
+    private void addInternalFluidPipeConnection(UUID pipeId, BlockPos connectionPoint) {
+        if (!connectedFluidPipeMultiblocksMap.containsKey(pipeId)) {
+            connectedFluidPipeMultiblocksMap.put(pipeId, new HashSet<>());
+        }
+        connectedFluidPipeMultiblocksMap.get(pipeId).add(connectionPoint);
+    }
+
+    // Notify multiblock about transferred connections
+    private void notifyMultiblockAboutTransferredConnections(UUID multiblockId, Set<BlockPos> pointsToTransfer,
+                                                             UUID oldPortalId, UUID newPortalId, boolean isPowerCable) {
+        if (isPowerCable) {
+            PowerCableMultiblock cable = PortalMultiblockManager.getPowerCableMultiblock(multiblockId);
+            if (cable != null) {
+                for (BlockPos connectionPoint : pointsToTransfer) {
+                    // Remove old connection
+                    cable.removePortalConnectionFromPortal(oldPortalId, connectionPoint);
+                    // Add new connection
+                    PortalStructure newStructure = PortalMultiblockManager.getPortalStructure(newPortalId);
+                    if (newStructure != null) {
+                        cable.addPortalConnectionFromPortal(newStructure.portalId, connectionPoint);
+                    }
+                }
+            }
+        } else {
+            FluidPipeMultiblock pipe = PortalMultiblockManager.getFluidPipeMultiblock(multiblockId);
+            if (pipe != null) {
+                for (BlockPos connectionPoint : pointsToTransfer) {
+                    // Remove old connection
+                    pipe.removePortalConnectionFromPortal(oldPortalId, connectionPoint);
+                    // Add new connection
+                    PortalStructure newStructure = PortalMultiblockManager.getPortalStructure(newPortalId);
+                    if (newStructure != null) {
+                        pipe.addPortalConnectionFromPortal(newStructure.portalId, connectionPoint);
+                    }
+                }
+            }
         }
     }
 
@@ -351,60 +1024,99 @@ public class PortalStructure {
     public void revalidateStructure() {
         Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " revalidating structure...", true);
 
-        // Clear previous state but keep connected blocks
-        frameBlocks.clear();
+        // Clear previous interior blocks
         interiorBlocks.clear();
         isValid = false;
+        bounds = null;
 
-        // If we lost our controller, portal is invalid
-        if (portalControllers.isEmpty()) {
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " INVALID: No controllers", true);
-            setActive(false);
-            return;
-        }
-
+        // Run validation
         isValid = validatePortalStructure();
 
         if (isValid) {
             calculateInteriorBlocks();
-            if (isActive) {
-                activatePortal();
+            bounds = PortalBounds.calculateFromFrame(frameBlocks);
+
+            if (bounds == null) {
+                Logger.sendMessage("WARNING: Could not calculate portal bounds", true);
+                isValid = false;
+            } else {
+                if (isActive) {
+                    PortalManager.registerActivePortal(this);
+                }
+                Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " VALIDATED: " +
+                        frameBlocks.size() + " frame blocks, " + interiorBlocks.size() + " interior blocks, " +
+                        portalControllers.size() + " controllers", true);
             }
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " VALIDATED: " +
-                    frameBlocks.size() + " frame blocks, " + interiorBlocks.size() + " interior blocks", true);
         } else {
             Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " INVALID: Structure validation failed", true);
-            setActive(false);
         }
+
+        markForSave();
     }
 
     private boolean validatePortalStructure() {
         Logger.sendMessage("VALIDATION: Starting structure validation for PortalStructure " + portalId.toString().substring(0, 8), true);
 
-        // Check if we have a controller
+        // 1. SIMPLEST CHECK: Must have at least one controller
         if (portalControllers.isEmpty()) {
             Logger.sendMessage("VALIDATION FAILED: No controllers found", true);
             return false;
         }
 
-        // Check if controller is adjacent to frame
-        boolean controllerAdjacentToFrame = false;
-        for (PortalControllerBlockEntity controller : portalControllers) {
-            BlockPos controllerPos = controller.getBlockPos();
-            if (isControllerAdjacentToFrame(controllerPos)) {
-                controllerAdjacentToFrame = true;
-                Logger.sendMessage("VALIDATION: Controller at " + controllerPos + " is adjacent to frame", true);
-                break;
-            }
-        }
-
-        if (!controllerAdjacentToFrame) {
-            Logger.sendMessage("VALIDATION FAILED: No controller adjacent to frame blocks", true);
+        // 2. SIMPLE CHECK: Must have at least 4 frame blocks (minimum for corners)
+        if (frameBlocks.size() < 4) {
+            Logger.sendMessage("VALIDATION FAILED: Too few frame blocks (" + frameBlocks.size() + ")", true);
             return false;
         }
 
-        // Validate frame structure
-        if (!validateRectangleFrame()) {
+        // 3. SIMPLE CHECK: All blocks must form a vertical plane (same X or same Z)
+        Set<Integer> xValues = new HashSet<>();
+        Set<Integer> zValues = new HashSet<>();
+
+        for (BlockPos pos : frameBlocks) {
+            xValues.add(pos.getX());
+            zValues.add(pos.getZ());
+        }
+
+        // Must be either all same X (vertical plane on X) OR all same Z (vertical plane on Z)
+        boolean isXPlane = xValues.size() == 1;
+        boolean isZPlane = zValues.size() == 1;
+
+        if (!isXPlane && !isZPlane) {
+            Logger.sendMessage("VALIDATION FAILED: Frame blocks not in a vertical plane (X values: " + xValues.size() + ", Z values: " + zValues.size() + ")", true);
+            return false;
+        }
+
+        // Determine which axis is constant (the plane orientation)
+        boolean constantX = isXPlane;
+        int constantValue = isXPlane ? xValues.iterator().next() : zValues.iterator().next();
+        String planeType = isXPlane ? "X" : "Z";
+
+        Logger.sendMessage("VALIDATION: Frame is vertical plane on " + planeType + " = " + constantValue, true);
+
+        // 4. SIMPLE CHECK: Controller must be adjacent to at least one frame block
+        boolean controllerAdjacent = false;
+        for (PortalControllerBlockEntity controller : portalControllers) {
+            BlockPos controllerPos = controller.getBlockPos();
+            for (BlockPos framePos : frameBlocks) {
+                // Check if controller is adjacent (including diagonals)
+                double distance = controllerPos.distToCenterSqr(framePos.getX() + 0.5, framePos.getY() + 0.5, framePos.getZ() + 0.5);
+                if (distance <= 2.0) {
+                    controllerAdjacent = true;
+                    Logger.sendMessage("VALIDATION: Controller at " + controllerPos + " is adjacent to frame block at " + framePos, true);
+                    break;
+                }
+            }
+            if (controllerAdjacent) break;
+        }
+
+        if (!controllerAdjacent) {
+            Logger.sendMessage("VALIDATION FAILED: No controller adjacent to any frame block", true);
+            return false;
+        }
+
+        // Now do corner-based validation (adjusted for vertical plane)
+        if (!validateRectangleFrame(constantX, constantValue)) {
             Logger.sendMessage("VALIDATION FAILED: Frame structure invalid", true);
             return false;
         }
@@ -419,130 +1131,413 @@ public class PortalStructure {
         return true;
     }
 
-    private boolean validateRectangleFrame() {
-        Logger.sendMessage("FRAME VALIDATION: Checking frame structure with " + frameBlocks.size() + " blocks", true);
+    private boolean validateRectangleFrame(boolean constantX, int constantValue) {
+        Logger.sendMessage("FRAME VALIDATION: Checking vertical rectangle with " + frameBlocks.size() + " blocks", true);
 
-        if (frameBlocks.size() < 10) { // Minimum for 3x4 frame perimeter (12 blocks - 2 corners overlap)
-            Logger.sendMessage("FRAME VALIDATION FAILED: Too few frame blocks (" + frameBlocks.size() + ")", true);
-            return false;
-        }
+        Set<BlockPos> levelFrames = new HashSet<>(frameBlocks);
 
-        // Group frames by Y level (portals are flat structures)
-        Map<Integer, Set<BlockPos>> framesByLevel = new HashMap<>();
-        for (BlockPos pos : frameBlocks) {
-            framesByLevel.computeIfAbsent(pos.getY(), k -> new HashSet<>()).add(pos);
-        }
-
-        // We only support single-level portals for now
-        if (framesByLevel.size() != 1) {
-            Logger.sendMessage("FRAME VALIDATION FAILED: Multi-level frames not supported (" + framesByLevel.size() + " levels)", true);
-            return false;
-        }
-
-        int yLevel = framesByLevel.keySet().iterator().next();
-        Set<BlockPos> levelFrames = framesByLevel.get(yLevel);
-
-        // Find the bounding box of all frame blocks at this level
-        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
-        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-
+        // Step 1: Find all corner candidates (blocks with neighbors in perpendicular directions)
+        Set<BlockPos> cornerCandidates = new HashSet<>();
         for (BlockPos pos : levelFrames) {
-            minX = Math.min(minX, pos.getX());
-            maxX = Math.max(maxX, pos.getX());
-            minZ = Math.min(minZ, pos.getZ());
-            maxZ = Math.max(maxZ, pos.getZ());
+            if (isCornerCandidate(pos, levelFrames, constantX)) {
+                cornerCandidates.add(pos);
+            }
         }
 
-        int width = maxX - minX + 1;
-        int height = maxZ - minZ + 1;
+        Logger.sendMessage("FRAME VALIDATION: Found " + cornerCandidates.size() + " corner candidates", true);
 
-        Logger.sendMessage("FRAME VALIDATION: Bounding box " + width + "x" + height + " at Y=" + yLevel, true);
-
-        // Must be at least 3x4 or 4x4 (player needs 2 blocks interior height)
-        boolean validDimensions = (width >= 3 && height >= 4) || (width >= 4 && height >= 4);
-        if (!validDimensions) {
-            Logger.sendMessage("FRAME VALIDATION FAILED: Invalid dimensions " + width + "x" + height + " - need min 3x4 or 4x4", true);
+        // Step 2: Must have exactly 4 corners
+        if (cornerCandidates.size() != 4) {
+            Logger.sendMessage("FRAME VALIDATION FAILED: Expected 4 corners, found " + cornerCandidates.size(), true);
             return false;
         }
 
-        // Calculate interior dimensions
-        int interiorWidth = width - 2;
-        int interiorHeight = height - 2;
-
-        // Player must fit (1 block wide × 2 blocks tall minimum)
-        boolean playerFits = interiorWidth >= 1 && interiorHeight >= 2;
-        if (!playerFits) {
-            Logger.sendMessage("FRAME VALIDATION FAILED: Interior too small " + interiorWidth + "x" + interiorHeight + " - player needs 1x2 minimum", true);
+        // Step 3: Identify the corners
+        Map<String, BlockPos> corners = identifyCorners(cornerCandidates, constantX);
+        if (corners.size() != 4) {
+            Logger.sendMessage("FRAME VALIDATION FAILED: Could not identify 4 distinct corners", true);
             return false;
         }
 
-        Logger.sendMessage("FRAME VALIDATION: Interior dimensions " + interiorWidth + "x" + interiorHeight + " - player can fit", true);
+        // Step 4: Trace edges and validate rectangle
+        boolean result = traceAndValidateRectangle(corners, levelFrames, constantX, constantValue);
 
-        // Verify we have a complete rectangular frame
-        boolean result = verifyCompleteRectangleFrame(minX, maxX, minZ, maxZ, yLevel, levelFrames);
         if (result) {
-            Logger.sendMessage("FRAME VALIDATION PASSED: Complete " + width + "x" + height + " rectangle", true);
+            Logger.sendMessage("FRAME VALIDATION PASSED: Complete vertical rectangle structure", true);
+
+            // Calculate interior dimensions
+            BlockPos topLeft = corners.get("topLeft");
+            BlockPos bottomRight = corners.get("bottomRight");
+
+            int interiorWidth, interiorHeight;
+            if (constantX) {
+                // X-plane: interior dimensions are in Z (width) and Y (height)
+                interiorWidth = Math.abs(bottomRight.getZ() - topLeft.getZ()) - 1;
+                interiorHeight = Math.abs(bottomRight.getY() - topLeft.getY()) - 1;
+            } else {
+                // Z-plane: interior dimensions are in X (width) and Y (height)
+                interiorWidth = Math.abs(bottomRight.getX() - topLeft.getX()) - 1;
+                interiorHeight = Math.abs(bottomRight.getY() - topLeft.getY()) - 1;
+            }
+
+            // Check interior is at least 1x2 for player (width x height)
+            if (interiorWidth < 1 || interiorHeight < 2) {
+                Logger.sendMessage("FRAME VALIDATION FAILED: Interior too small " + interiorWidth + "x" + interiorHeight + " - needs min 1x2 for player", true);
+                return false;
+            }
+
+            Logger.sendMessage("FRAME VALIDATION: Interior dimensions " + interiorWidth + "x" + interiorHeight, true);
         } else {
-            Logger.sendMessage("FRAME VALIDATION FAILED: Incomplete rectangle", true);
+            Logger.sendMessage("FRAME VALIDATION FAILED: Invalid rectangle structure", true);
         }
+
         return result;
     }
 
-    private boolean verifyCompleteRectangleFrame(int minX, int maxX, int minZ, int maxZ, int yLevel, Set<BlockPos> levelFrames) {
-        Logger.sendMessage("RECTANGLE VALIDATION: Checking complete rectangle from (" + minX + "," + minZ + ") to (" + maxX + "," + maxZ + ")", true);
+    // Helper method to check if a block is a corner candidate in vertical plane
+    private boolean isCornerCandidate(BlockPos pos, Set<BlockPos> frameBlocks, boolean constantX) {
+        // For vertical plane, we need to check neighbors differently
+        // If constantX, we check Y and Z neighbors
+        // If constantZ, we check X and Y neighbors
 
-        // Check all four edges are completely filled with frame blocks
-        for (int x = minX; x <= maxX; x++) {
-            // Bottom edge
-            if (!levelFrames.contains(new BlockPos(x, yLevel, minZ))) {
-                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Missing frame block at bottom edge (" + x + "," + minZ + ")", true);
-                return false;
-            }
-            // Top edge
-            if (!levelFrames.contains(new BlockPos(x, yLevel, maxZ))) {
-                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Missing frame block at top edge (" + x + "," + maxZ + ")", true);
-                return false;
+        boolean hasNeighbor1 = false;
+        boolean hasNeighbor2 = false;
+        boolean hasNeighbor3 = false;
+        boolean hasNeighbor4 = false;
+
+        if (constantX) {
+            // X-plane: check neighbors in Y and Z directions
+            hasNeighbor1 = frameBlocks.contains(pos.above());    // +Y
+            hasNeighbor2 = frameBlocks.contains(pos.below());    // -Y
+            hasNeighbor3 = frameBlocks.contains(pos.north());    // +Z
+            hasNeighbor4 = frameBlocks.contains(pos.south());    // -Z
+        } else {
+            // Z-plane: check neighbors in X and Y directions
+            hasNeighbor1 = frameBlocks.contains(pos.above());    // +Y
+            hasNeighbor2 = frameBlocks.contains(pos.below());    // -Y
+            hasNeighbor3 = frameBlocks.contains(pos.east());     // +X
+            hasNeighbor4 = frameBlocks.contains(pos.west());     // -X
+        }
+
+        // Count how many directions have neighbors
+        int neighborCount = 0;
+        if (hasNeighbor1) neighborCount++;
+        if (hasNeighbor2) neighborCount++;
+        if (hasNeighbor3) neighborCount++;
+        if (hasNeighbor4) neighborCount++;
+
+        // Must have exactly 2 neighbors (for a corner in a rectangle)
+        if (neighborCount != 2) {
+            return false;
+        }
+
+        // Must not have both neighbors on same axis
+        // For X-plane: can't have both up/down AND both north/south
+        // For Z-plane: can't have both up/down AND both east/west
+        if ((hasNeighbor1 && hasNeighbor2) || (hasNeighbor3 && hasNeighbor4)) {
+            return false;
+        }
+
+        // Must have one vertical neighbor (Y) and one horizontal neighbor (X or Z)
+        boolean hasVertical = hasNeighbor1 || hasNeighbor2;
+        boolean hasHorizontal = hasNeighbor3 || hasNeighbor4;
+
+        return hasVertical && hasHorizontal;
+    }
+
+    // Identify corners in vertical plane
+    private Map<String, BlockPos> identifyCorners(Set<BlockPos> cornerCandidates, boolean constantX) {
+        Map<String, BlockPos> corners = new HashMap<>();
+
+        // Find min and max coordinates
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        int minOther = Integer.MAX_VALUE, maxOther = Integer.MIN_VALUE;
+
+        for (BlockPos pos : cornerCandidates) {
+            minY = Math.min(minY, pos.getY());
+            maxY = Math.max(maxY, pos.getY());
+
+            if (constantX) {
+                // X-plane: use Z coordinate
+                int z = pos.getZ();
+                minOther = Math.min(minOther, z);
+                maxOther = Math.max(maxOther, z);
+            } else {
+                // Z-plane: use X coordinate
+                int x = pos.getX();
+                minOther = Math.min(minOther, x);
+                maxOther = Math.max(maxOther, x);
             }
         }
 
-        for (int z = minZ; z <= maxZ; z++) {
-            // Left edge
-            if (!levelFrames.contains(new BlockPos(minX, yLevel, z))) {
-                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Missing frame block at left edge (" + minX + "," + z + ")", true);
-                return false;
-            }
-            // Right edge
-            if (!levelFrames.contains(new BlockPos(maxX, yLevel, z))) {
-                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Missing frame block at right edge (" + maxX + "," + z + ")", true);
-                return false;
-            }
-        }
-
-        // Verify no frame blocks outside the rectangle
-        for (BlockPos pos : levelFrames) {
-            if (pos.getX() < minX || pos.getX() > maxX || pos.getZ() < minZ || pos.getZ() > maxZ) {
-                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Frame block outside rectangle at " + pos, true);
-                return false;
-            }
-        }
-
-        // Verify interior is empty (no frame blocks inside)
-        int interiorBlocksFound = 0;
-        for (int x = minX + 1; x < maxX; x++) {
-            for (int z = minZ + 1; z < maxZ; z++) {
-                if (levelFrames.contains(new BlockPos(x, yLevel, z))) {
-                    interiorBlocksFound++;
-                    Logger.sendMessage("RECTANGLE VALIDATION FAILED: Frame block in interior at (" + x + "," + z + ")", true);
+        // Assign corners based on coordinates
+        // "top" means higher Y, "bottom" means lower Y
+        for (BlockPos pos : cornerCandidates) {
+            if (pos.getY() == maxY) {
+                // Top row
+                if (constantX) {
+                    if (pos.getZ() == minOther) {
+                        corners.put("topLeft", pos);      // Top-left: max Y, min Z
+                    } else if (pos.getZ() == maxOther) {
+                        corners.put("topRight", pos);     // Top-right: max Y, max Z
+                    }
+                } else {
+                    if (pos.getX() == minOther) {
+                        corners.put("topLeft", pos);      // Top-left: max Y, min X
+                    } else if (pos.getX() == maxOther) {
+                        corners.put("topRight", pos);     // Top-right: max Y, max X
+                    }
+                }
+            } else if (pos.getY() == minY) {
+                // Bottom row
+                if (constantX) {
+                    if (pos.getZ() == minOther) {
+                        corners.put("bottomLeft", pos);   // Bottom-left: min Y, min Z
+                    } else if (pos.getZ() == maxOther) {
+                        corners.put("bottomRight", pos);  // Bottom-right: min Y, max Z
+                    }
+                } else {
+                    if (pos.getX() == minOther) {
+                        corners.put("bottomLeft", pos);   // Bottom-left: min Y, min X
+                    } else if (pos.getX() == maxOther) {
+                        corners.put("bottomRight", pos);  // Bottom-right: min Y, max X
+                    }
                 }
             }
         }
 
-        if (interiorBlocksFound > 0) {
-            Logger.sendMessage("RECTANGLE VALIDATION FAILED: " + interiorBlocksFound + " frame blocks found in interior", true);
+        return corners;
+    }
+
+    // Trace edges and validate the vertical rectangle
+    private boolean traceAndValidateRectangle(Map<String, BlockPos> corners, Set<BlockPos> frameBlocks,
+                                              boolean constantX, int constantValue) {
+        BlockPos topLeft = corners.get("topLeft");
+        BlockPos topRight = corners.get("topRight");
+        BlockPos bottomLeft = corners.get("bottomLeft");
+        BlockPos bottomRight = corners.get("bottomRight");
+
+        if (topLeft == null || topRight == null || bottomLeft == null || bottomRight == null) {
             return false;
         }
 
-        Logger.sendMessage("RECTANGLE VALIDATION PASSED: Complete rectangle with no interior frame blocks", true);
+        if (constantX) {
+            // X-plane: Trace edges in Y and Z directions
+            int x = constantValue;
+
+            // Trace top edge (from topLeft to topRight) - constant Y = maxY, varying Z
+            int topY = topLeft.getY();
+            for (int z = Math.min(topLeft.getZ(), topRight.getZ());
+                 z <= Math.max(topLeft.getZ(), topRight.getZ()); z++) {
+                BlockPos pos = new BlockPos(x, topY, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at top edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace bottom edge (from bottomLeft to bottomRight) - constant Y = minY, varying Z
+            int bottomY = bottomLeft.getY();
+            for (int z = Math.min(bottomLeft.getZ(), bottomRight.getZ());
+                 z <= Math.max(bottomLeft.getZ(), bottomRight.getZ()); z++) {
+                BlockPos pos = new BlockPos(x, bottomY, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at bottom edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace left edge (from topLeft to bottomLeft) - constant Z = minZ, varying Y
+            int leftZ = Math.min(topLeft.getZ(), bottomLeft.getZ());
+            for (int y = Math.min(topLeft.getY(), bottomLeft.getY());
+                 y <= Math.max(topLeft.getY(), bottomLeft.getY()); y++) {
+                BlockPos pos = new BlockPos(x, y, leftZ);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at left edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace right edge (from topRight to bottomRight) - constant Z = maxZ, varying Y
+            int rightZ = Math.max(topRight.getZ(), bottomRight.getZ());
+            for (int y = Math.min(topRight.getY(), bottomRight.getY());
+                 y <= Math.max(topRight.getY(), bottomRight.getY()); y++) {
+                BlockPos pos = new BlockPos(x, y, rightZ);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at right edge " + pos, true);
+                    return false;
+                }
+            }
+        } else {
+            // Z-plane: Trace edges in X and Y directions
+            int z = constantValue;
+
+            // Trace top edge (from topLeft to topRight) - constant Y = maxY, varying X
+            int topY = topLeft.getY();
+            for (int x = Math.min(topLeft.getX(), topRight.getX());
+                 x <= Math.max(topLeft.getX(), topRight.getX()); x++) {
+                BlockPos pos = new BlockPos(x, topY, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at top edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace bottom edge (from bottomLeft to bottomRight) - constant Y = minY, varying X
+            int bottomY = bottomLeft.getY();
+            for (int x = Math.min(bottomLeft.getX(), bottomRight.getX());
+                 x <= Math.max(bottomLeft.getX(), bottomRight.getX()); x++) {
+                BlockPos pos = new BlockPos(x, bottomY, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at bottom edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace left edge (from topLeft to bottomLeft) - constant X = minX, varying Y
+            int leftX = Math.min(topLeft.getX(), bottomLeft.getX());
+            for (int y = Math.min(topLeft.getY(), bottomLeft.getY());
+                 y <= Math.max(topLeft.getY(), bottomLeft.getY()); y++) {
+                BlockPos pos = new BlockPos(leftX, y, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at left edge " + pos, true);
+                    return false;
+                }
+            }
+
+            // Trace right edge (from topRight to bottomRight) - constant X = maxX, varying Y
+            int rightX = Math.max(topRight.getX(), bottomRight.getX());
+            for (int y = Math.min(topRight.getY(), bottomRight.getY());
+                 y <= Math.max(topRight.getY(), bottomRight.getY()); y++) {
+                BlockPos pos = new BlockPos(rightX, y, z);
+                if (!frameBlocks.contains(pos)) {
+                    Logger.sendMessage("RECTANGLE TRACE FAILED: Missing frame block at right edge " + pos, true);
+                    return false;
+                }
+            }
+        }
+
+        // Verify no extra portal blocks outside the rectangle
+        for (BlockPos pos : frameBlocks) {
+            if (!isOnRectangleEdge(pos, corners, constantX, constantValue)) {
+                Logger.sendMessage("RECTANGLE VALIDATION FAILED: Extra portal block at " + pos + " not on frame edges", true);
+                return false;
+            }
+        }
+
+        // Verify interior is empty (must be air)
+        if (!verifyInteriorIsEmpty(corners, constantX, constantValue)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    // Check if a position is on the rectangle edge
+    private boolean isOnRectangleEdge(BlockPos pos, Map<String, BlockPos> corners, boolean constantX, int constantValue) {
+        BlockPos topLeft = corners.get("topLeft");
+        BlockPos topRight = corners.get("topRight");
+        BlockPos bottomLeft = corners.get("bottomLeft");
+        BlockPos bottomRight = corners.get("bottomRight");
+
+        if (constantX) {
+            // X-plane
+            if (pos.getX() != constantValue) return false;
+
+            boolean onTopEdge = pos.getY() == topLeft.getY() &&
+                    pos.getZ() >= Math.min(topLeft.getZ(), topRight.getZ()) &&
+                    pos.getZ() <= Math.max(topLeft.getZ(), topRight.getZ());
+            boolean onBottomEdge = pos.getY() == bottomLeft.getY() &&
+                    pos.getZ() >= Math.min(bottomLeft.getZ(), bottomRight.getZ()) &&
+                    pos.getZ() <= Math.max(bottomLeft.getZ(), bottomRight.getZ());
+            boolean onLeftEdge = pos.getZ() == Math.min(topLeft.getZ(), bottomLeft.getZ()) &&
+                    pos.getY() >= Math.min(topLeft.getY(), bottomLeft.getY()) &&
+                    pos.getY() <= Math.max(topLeft.getY(), bottomLeft.getY());
+            boolean onRightEdge = pos.getZ() == Math.max(topRight.getZ(), bottomRight.getZ()) &&
+                    pos.getY() >= Math.min(topRight.getY(), bottomRight.getY()) &&
+                    pos.getY() <= Math.max(topRight.getY(), bottomRight.getY());
+
+            return onTopEdge || onBottomEdge || onLeftEdge || onRightEdge;
+        } else {
+            // Z-plane
+            if (pos.getZ() != constantValue) return false;
+
+            boolean onTopEdge = pos.getY() == topLeft.getY() &&
+                    pos.getX() >= Math.min(topLeft.getX(), topRight.getX()) &&
+                    pos.getX() <= Math.max(topLeft.getX(), topRight.getX());
+            boolean onBottomEdge = pos.getY() == bottomLeft.getY() &&
+                    pos.getX() >= Math.min(bottomLeft.getX(), bottomRight.getX()) &&
+                    pos.getX() <= Math.max(bottomLeft.getX(), bottomRight.getX());
+            boolean onLeftEdge = pos.getX() == Math.min(topLeft.getX(), bottomLeft.getX()) &&
+                    pos.getY() >= Math.min(topLeft.getY(), bottomLeft.getY()) &&
+                    pos.getY() <= Math.max(topLeft.getY(), bottomLeft.getY());
+            boolean onRightEdge = pos.getX() == Math.max(topRight.getX(), bottomRight.getX()) &&
+                    pos.getY() >= Math.min(topRight.getY(), bottomRight.getY()) &&
+                    pos.getY() <= Math.max(topRight.getY(), bottomRight.getY());
+
+            return onTopEdge || onBottomEdge || onLeftEdge || onRightEdge;
+        }
+    }
+
+    // Verify interior blocks are air (adjusted for vertical plane)
+    private boolean verifyInteriorIsEmpty(Map<String, BlockPos> corners, boolean constantX, int constantValue) {
+        BlockPos topLeft = corners.get("topLeft");
+        BlockPos bottomRight = corners.get("bottomRight");
+
+        if (constantX) {
+            // X-plane: interior is in Y (vertical) and Z (horizontal)
+            int x = constantValue;
+            int minY = Math.min(topLeft.getY(), bottomRight.getY());
+            int maxY = Math.max(topLeft.getY(), bottomRight.getY());
+            int minZ = Math.min(topLeft.getZ(), bottomRight.getZ());
+            int maxZ = Math.max(topLeft.getZ(), bottomRight.getZ());
+
+            // Scan interior area (skip the edges)
+            for (int y = minY + 1; y < maxY; y++) {
+                for (int z = minZ + 1; z < maxZ; z++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+
+                    // Check if block is a portal block (shouldn't be in interior)
+                    if (frameBlocks.contains(pos)) {
+                        Logger.sendMessage("INTERIOR VALIDATION FAILED: Portal block found in interior at " + pos, true);
+                        return false;
+                    }
+
+                    // Check if block is air
+                    if (!level.isEmptyBlock(pos)) {
+                        Logger.sendMessage("INTERIOR VALIDATION FAILED: Non-air block found in interior at " + pos, true);
+                        return false;
+                    }
+                }
+            }
+        } else {
+            // Z-plane: interior is in Y (vertical) and X (horizontal)
+            int z = constantValue;
+            int minY = Math.min(topLeft.getY(), bottomRight.getY());
+            int maxY = Math.max(topLeft.getY(), bottomRight.getY());
+            int minX = Math.min(topLeft.getX(), bottomRight.getX());
+            int maxX = Math.max(topLeft.getX(), bottomRight.getX());
+
+            // Scan interior area (skip the edges)
+            for (int y = minY + 1; y < maxY; y++) {
+                for (int x = minX + 1; x < maxX; x++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+
+                    // Check if block is a portal block (shouldn't be in interior)
+                    if (frameBlocks.contains(pos)) {
+                        Logger.sendMessage("INTERIOR VALIDATION FAILED: Portal block found in interior at " + pos, true);
+                        return false;
+                    }
+
+                    // Check if block is air
+                    if (!level.isEmptyBlock(pos)) {
+                        Logger.sendMessage("INTERIOR VALIDATION FAILED: Non-air block found in interior at " + pos, true);
+                        return false;
+                    }
+                }
+            }
+        }
+
         return true;
     }
 
@@ -551,26 +1546,69 @@ public class PortalStructure {
 
         if (frameBlocks.isEmpty()) return;
 
-        // Get the bounding box from frame blocks (all at same Y level)
-        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
-        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-        int yLevel = frameBlocks.iterator().next().getY();
+        // First we need to determine if the structure is valid and get plane orientation
+        Set<Integer> xValues = new HashSet<>();
+        Set<Integer> zValues = new HashSet<>();
 
         for (BlockPos pos : frameBlocks) {
-            minX = Math.min(minX, pos.getX());
-            maxX = Math.max(maxX, pos.getX());
-            minZ = Math.min(minZ, pos.getZ());
-            maxZ = Math.max(maxZ, pos.getZ());
+            xValues.add(pos.getX());
+            zValues.add(pos.getZ());
         }
 
-        // Add all interior positions (inside the frame)
-        for (int x = minX + 1; x < maxX; x++) {
-            for (int z = minZ + 1; z < maxZ; z++) {
-                interiorBlocks.add(new BlockPos(x, yLevel, z));
+        boolean constantX = xValues.size() == 1;
+        if (!constantX && zValues.size() != 1) {
+            // Not a valid vertical plane
+            return;
+        }
+
+        int constantValue = constantX ? xValues.iterator().next() : zValues.iterator().next();
+
+        // Get corners
+        Set<BlockPos> cornerCandidates = new HashSet<>();
+        for (BlockPos pos : frameBlocks) {
+            if (isCornerCandidate(pos, frameBlocks, constantX)) {
+                cornerCandidates.add(pos);
             }
         }
 
-        Logger.sendMessage("INTERIOR: Calculated " + interiorBlocks.size() + " interior blocks from (" + (minX+1) + "," + (minZ+1) + ") to (" + (maxX-1) + "," + (maxZ-1) + ")", true);
+        if (cornerCandidates.size() != 4) return;
+
+        Map<String, BlockPos> corners = identifyCorners(cornerCandidates, constantX);
+        if (corners.size() != 4) return;
+
+        BlockPos topLeft = corners.get("topLeft");
+        BlockPos bottomRight = corners.get("bottomRight");
+
+        // Add all interior positions
+        if (constantX) {
+            // X-plane
+            int x = constantValue;
+            int minY = Math.min(topLeft.getY(), bottomRight.getY());
+            int maxY = Math.max(topLeft.getY(), bottomRight.getY());
+            int minZ = Math.min(topLeft.getZ(), bottomRight.getZ());
+            int maxZ = Math.max(topLeft.getZ(), bottomRight.getZ());
+
+            for (int y = minY + 1; y < maxY; y++) {
+                for (int z = minZ + 1; z < maxZ; z++) {
+                    interiorBlocks.add(new BlockPos(x, y, z));
+                }
+            }
+        } else {
+            // Z-plane
+            int z = constantValue;
+            int minY = Math.min(topLeft.getY(), bottomRight.getY());
+            int maxY = Math.max(topLeft.getY(), bottomRight.getY());
+            int minX = Math.min(topLeft.getX(), bottomRight.getX());
+            int maxX = Math.max(topLeft.getX(), bottomRight.getX());
+
+            for (int y = minY + 1; y < maxY; y++) {
+                for (int x = minX + 1; x < maxX; x++) {
+                    interiorBlocks.add(new BlockPos(x, y, z));
+                }
+            }
+        }
+
+        Logger.sendMessage("INTERIOR: Calculated " + interiorBlocks.size() + " interior blocks", true);
     }
 
     private boolean validateAttachmentBlocks() {
@@ -583,17 +1621,6 @@ public class PortalStructure {
 
         Logger.sendMessage("ATTACHMENT VALIDATION PASSED: All attachments valid", true);
         return true;
-    }
-
-    private boolean isControllerAdjacentToFrame(BlockPos pos) {
-        // Check if this block is adjacent to any frame block (including diagonals)
-        for (BlockPos framePos : frameBlocks) {
-            double distance = pos.distToCenterSqr(framePos.getX() + 0.5, framePos.getY() + 0.5, framePos.getZ() + 0.5);
-            if (distance <= 2.0) { // Adjacent: 1 block away (1.0) or diagonal (2.0)
-                return true;
-            }
-        }
-        return false;
     }
 
     public void addPowerCableMultiblock(PowerCableMultiblock cableMultiblock) {
@@ -627,6 +1654,8 @@ public class PortalStructure {
         for (BlockPos cablePos : connectionPoints) {
             cableMultiblock.addPortalConnectionFromPortal(this.portalId, cablePos);
         }
+
+        markForSave();
     }
 
     public void removePowerCableMultiblock(PowerCableMultiblock cableMultiblock) {
@@ -647,6 +1676,8 @@ public class PortalStructure {
         } else {
             Logger.sendMessage("WARNING: Cable ID " + cableId.toString().substring(0, 8) + " not found in connectedPowerCableMultiblocksMap", true);
         }
+
+        markForSave();
     }
 
     public void addFluidPipeMultiblock(FluidPipeMultiblock pipeMultiblock) {
@@ -680,6 +1711,8 @@ public class PortalStructure {
         for (BlockPos pipePos : connectionPoints) {
             pipeMultiblock.addPortalConnectionFromPortal(this.portalId, pipePos);
         }
+
+        markForSave();
     }
 
     public void removeFluidPipeMultiblock(FluidPipeMultiblock pipeMultiblock) {
@@ -700,6 +1733,8 @@ public class PortalStructure {
         } else {
             Logger.sendMessage("WARNING: Pipe ID " + pipeId.toString().substring(0, 8) + " not found in connectedFluidPipeMultiblocksMap", true);
         }
+
+        markForSave();
     }
 
     // Helper methods to find adjacent cable/pipe positions for bidirectional tracking
@@ -814,6 +1849,8 @@ public class PortalStructure {
             Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
                     " power consumption PARTIAL: " + (amount - remaining) + "/" + amount + " FE consumed", true);
         }
+
+        markForSave();
         return success;
     }
 
@@ -849,6 +1886,8 @@ public class PortalStructure {
             Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) +
                     " fluid consumption PARTIAL: " + (amount - remaining) + "/" + amount + " mB consumed", true);
         }
+
+        markForSave();
         return success;
     }
 
@@ -897,66 +1936,122 @@ public class PortalStructure {
         return total;
     }
 
-    public void activatePortal() {
-        if (isValid && !isActive) {
-            setActive(true);
+    // PORTAL ACTIVATION METHODS
+    public String activatePortal(PortalStructure teleportToPortal) {
+        String error = "";
+        if (!isValid) {
+            Logger.sendMessage("Cannot activate invalid portal structure", true);
+            error = "Cannot activate invalid current portal structure";
+            return error;
         }
+        if(teleportToPortal == null|| !teleportToPortal.isValid) {
+            error = "Cannot activate invalid or nonexisting portal structure";
+            return error;
+        }
+
+        // Check if we have at least one linked portal
+
+
+        // Set this as activating side
+        settings.setActivatingSide(true);
+
+        // Check fluid for activation (only on activating side)
+        if (getCurrentFluid() < PortalManager.ACTIVATION_FLUID_COST) {
+            Logger.sendMessage("Cannot activate portal: Insufficient fluid (" +
+                    getCurrentFluid() + "/" + PortalManager.ACTIVATION_FLUID_COST + " mB)", true);
+            settings.setActivatingSide(false);
+            error = "Cannot activate portal: Insufficient fluid";
+            return error;
+        }
+        if (getCurrentPower() < PortalManager.MAINTENANCE_POWER_COST) {
+            Logger.sendMessage("Cannot activate portal: Insufficient power", true);
+            settings.setActivatingSide(false);
+            return "cannot activate portal Insufficient power";
+        }
+        // Consume activation fluid
+        if (!consumeFluid(PortalManager.ACTIVATION_FLUID_COST)) {
+            Logger.sendMessage("Failed to consume activation fluid", true);
+            settings.setActivatingSide(false);
+            return "Failed to consume activation fluid";
+        }
+
+        // Check initial power
+
+
+        // Activate portal
+        isActive = true;
+        settings.setActivationTime(System.currentTimeMillis());
+
+        // Register with PortalManager for tick processing
+        PortalManager.registerActivePortal(this);
+
+        // Activate linked portals (they open for free)
+
+
+        Logger.sendMessage("Portal " + portalId.toString().substring(0, 8) + " ACTIVATED" +
+                (settings.isActivatingSide() ? " (activating side)" : " (linked side)"), true);
+
+        markForSave();
+        return "";
     }
 
-    public void deactivatePortal() {
-        if (isActive) {
-            setActive(false);
-        }
+
+
+    private void deactivatePortal() {
+        if (!isActive) return;
+
+        isActive = false;
+        settings.setActivatingSide(false);
+
+        // Unregister from PortalManager
+        PortalManager.unregisterPortal(this);
+
+        // Deactivate linked portals
+
+
+        Logger.sendMessage("Portal " + portalId.toString().substring(0, 8) + " DEACTIVATED", true);
+
+        markForSave();
     }
 
-    public void setActive(boolean active) {
-        boolean wasActive = this.isActive;
-        this.isActive = active && this.isValid;
-
-        if (wasActive && !this.isActive) {
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " DEACTIVATED", true);
-            deactivatePortal();
-        } else if (!wasActive && this.isActive) {
-            Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " ACTIVATED", true);
-            activatePortal();
-        }
-    }
-
-    // Name management methods
     public void setPortalName(String name) {
-        PortalMultiblockManager.updatePortalName(this.portalName, name, this.portalId);
-        this.portalName = name;
-        Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " renamed to: " + name, true);
+       if( PortalMultiblockManager.updatePortalName(settings.getPortalName(), name, this.portalId)){
+           settings.setPortalName(name);
+           Logger.sendMessage("PortalStructure " + portalId.toString().substring(0, 8) + " renamed to: " + name, true);
+           markForSave();
+       }
+
     }
 
     public String getPortalName() {
-        return portalName;
+        return settings.getPortalName();
     }
 
-    // Link management methods
     public void addLinkedPortal(UUID portalId) {
-        if (!linkedPortals.contains(portalId) && !portalId.equals(this.portalId)) {
-            linkedPortals.add(portalId);
+        if (!settings.getLinkedPortals().contains(portalId) && !portalId.equals(this.portalId)) {
+            settings.addLinkedPortal(portalId);
             Logger.sendMessage("PortalStructure " + this.portalId.toString().substring(0, 8) +
                     " linked to PortalStructure " + portalId.toString().substring(0, 8) +
-                    " (total: " + linkedPortals.size() + " links)", true);
+                    " (total: " + settings.getLinkedPortals().size() + " links)", true);
+            markForSave();
         }
     }
 
     public void removeLinkedPortal(UUID portalId) {
-        if (linkedPortals.remove(portalId)) {
+        settings.removeLinkedPortal(portalId);
             Logger.sendMessage("PortalStructure " + this.portalId.toString().substring(0, 8) +
                     " unlinked from PortalStructure " + portalId.toString().substring(0, 8) +
-                    " (total: " + linkedPortals.size() + " links)", true);
-        }
+                    " (total: " + settings.getLinkedPortals().size() + " links)", true);
+            markForSave();
+
     }
 
     public List<UUID> getLinkedPortals() {
-        return Collections.unmodifiableList(linkedPortals);
+        return settings.getLinkedPortals();
     }
 
     public boolean isLinkedTo(UUID portalId) {
-        return linkedPortals.contains(portalId);
+        return settings.getLinkedPortals().contains(portalId);
     }
 
     // Validation and state methods
@@ -1000,21 +2095,41 @@ public class PortalStructure {
     public PortalDimensions getDimensions() {
         if (frameBlocks.isEmpty()) return new PortalDimensions(0, 0);
 
-        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
-        int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
-        int yLevel = frameBlocks.iterator().next().getY();
+        // Determine plane orientation
+        Set<Integer> xValues = new HashSet<>();
+        Set<Integer> zValues = new HashSet<>();
 
         for (BlockPos pos : frameBlocks) {
-            if (pos.getY() == yLevel) {
-                minX = Math.min(minX, pos.getX());
-                maxX = Math.max(maxX, pos.getX());
-                minZ = Math.min(minZ, pos.getZ());
-                maxZ = Math.max(maxZ, pos.getZ());
+            xValues.add(pos.getX());
+            zValues.add(pos.getZ());
+        }
+
+        boolean constantX = xValues.size() == 1;
+        boolean constantZ = zValues.size() == 1;
+
+        if (!constantX && !constantZ) return new PortalDimensions(0, 0);
+
+        // Get min/max Y
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        int minOther = Integer.MAX_VALUE, maxOther = Integer.MIN_VALUE;
+
+        for (BlockPos pos : frameBlocks) {
+            minY = Math.min(minY, pos.getY());
+            maxY = Math.max(maxY, pos.getY());
+
+            if (constantX) {
+                int z = pos.getZ();
+                minOther = Math.min(minOther, z);
+                maxOther = Math.max(maxOther, z);
+            } else {
+                int x = pos.getX();
+                minOther = Math.min(minOther, x);
+                maxOther = Math.max(maxOther, x);
             }
         }
 
-        int interiorWidth = (maxX - minX) - 1;
-        int interiorHeight = (maxZ - minZ) - 1;
+        int interiorWidth = maxOther - minOther - 1;
+        int interiorHeight = maxY - minY - 1;
 
         return new PortalDimensions(interiorWidth, interiorHeight);
     }
@@ -1041,16 +2156,16 @@ public class PortalStructure {
     @Override
     public String toString() {
         return String.format("PortalStructure[%s: %s, Valid: %s, Active: %s, Power: %d/%d, Fluid: %d/%d, Links: %d, Cables: %d, Pipes: %d]",
-                portalId.toString().substring(0, 8), portalName, isValid, isActive,
+                portalId.toString().substring(0, 8), settings.getPortalName(), isValid, isActive,
                 getCurrentPower(), getMaxPowerCapacity(), getCurrentFluid(), getMaxFluidCapacity(),
-                linkedPortals.size(), connectedPowerCableMultiblocksMap.size(), connectedFluidPipeMultiblocksMap.size());
+                settings.getLinkedPortals().size(), connectedPowerCableMultiblocksMap.size(), connectedFluidPipeMultiblocksMap.size());
     }
 
     public String getStatus() {
         if (!isValid) return "Invalid Structure";
         if (!isActive) return "Inactive";
         return String.format("Active - %d links, %d/%d FE, %d/%d mB",
-                getLinkedPortals().size(), getCurrentPower(), getMaxPowerCapacity(),
+                settings.getLinkedPortals().size(), getCurrentPower(), getMaxPowerCapacity(),
                 getCurrentFluid(), getMaxFluidCapacity());
     }
 
@@ -1076,7 +2191,7 @@ public class PortalStructure {
     }
 
     public boolean canTeleport() {
-        return isActive() && hasPower() && !getLinkedPortals().isEmpty();
+        return isActive() && hasPower() && !settings.getLinkedPortals().isEmpty();
     }
 
     // Resource consumption for teleportation
@@ -1097,4 +2212,19 @@ public class PortalStructure {
                 getCurrentFluid() + "/" + fluidCost + " mB", true);
         return false;
     }
+
+    // Settings getters
+    public PortalSettings getSettings() { return settings; }
+    public boolean isActivatingSide() { return settings.isActivatingSide(); }
+    public boolean shouldCloseAfterTeleport() { return settings.shouldCloseAfterTeleport(); }
+    public void setCloseAfterTeleport(boolean close) {
+        settings.setCloseAfterTeleport(close);
+        markForSave();
+    }
+    public boolean isDurationExpired(long currentTime) {
+        return settings.isDurationExpired(currentTime);
+    }
+
+    // Bounds getter
+    public PortalBounds getBounds() { return bounds; }
 }
